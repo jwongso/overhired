@@ -159,15 +159,25 @@ function scrapeJobFromPage() {
 
   // 1. LinkedIn: parse bpr-guid hidden JSON elements
   if (/linkedin\.com\/jobs/i.test(window.location.href)) {
+    // Extract job ID from URL so we match only the currently displayed job.
+    // LinkedIn is a SPA: old bpr-guid elements stay in the DOM after navigation,
+    // so without this check the scraper returns the previous job's data.
+    const jobIdM = window.location.href.match(/(?:\/view\/|currentJobId=)(\d+)/);
+    const targetJobId = jobIdM ? jobIdM[1] : null;
+
     const codeEls = document.querySelectorAll('code[id^="bpr-guid-"]');
     for (const el of codeEls) {
       try {
         const parsed = JSON.parse(el.textContent);
         for (const item of (parsed.included || [])) {
-          if (!info.title && item.$type?.includes('jobs.JobPosting') && item.title) {
-            info.title = item.title;
-            if (item.companyDetails?.name) info.company = item.companyDetails.name;
-            if (item.description?.text)    info.description = item.description.text.slice(0, 6000);
+          if (item.$type?.includes('jobs.JobPosting') && item.title) {
+            // Skip stale bpr-guid elements that belong to a different job
+            if (targetJobId && item.entityUrn && !item.entityUrn.includes(targetJobId)) continue;
+            if (!info.title) {
+              info.title = item.title;
+              if (item.companyDetails?.name) info.company = item.companyDetails.name;
+              if (item.description?.text)    info.description = item.description.text.slice(0, 6000);
+            }
           }
           if (!info.location && item.$type?.includes('.Geo') && item.defaultLocalizedName) {
             info.location = item.defaultLocalizedName;

@@ -31,12 +31,15 @@
    * Resolves with the value; rejects on timeout.
    */
   function waitFor(fn, timeoutMs = 5000, intervalMs = 200) {
+    function _tryFn() {
+      try { return fn(); } catch (e) { console.warn('[overhired] waitFor: fn threw:', e); return null; }
+    }
     return new Promise((resolve, reject) => {
-      const result = fn();
+      const result = _tryFn();
       if (result) { resolve(result); return; }
 
       const timer    = setInterval(() => {
-        const r = fn();
+        const r = _tryFn();
         if (r) { clearInterval(timer); clearTimeout(deadline); resolve(r); }
       }, intervalMs);
 

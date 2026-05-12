@@ -95,6 +95,7 @@ async function getMuPDF() {
       _mupdf = await mod.default();
       return _mupdf;
     } catch (e) {
+      _mupdfReady = null; // allow retry on next call
       throw new Error(`MuPDF WASM failed to load: ${e.message}. ` +
         'Run: cd extension/wasm && node setup.js');
     }

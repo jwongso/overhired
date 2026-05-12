@@ -123,11 +123,9 @@
 
   async function fillForm(coverLetter) {
     const ats = detectATS();
-    const stored = await chrome.storage.local.get(['user_profile']);
-    const profile = stored.user_profile || {};
+    const stored = await chrome.storage.local.get(['user_profile']).catch(() => ({}));
+    const profile = stored?.user_profile || {};
 
-    // ATS handlers are pre-injected via manifest content_scripts (no import needed).
-    // window.__overhiredATS is populated by common.js + each handler file.
     const handlers = window.__overhiredATS || {};
     const fill = handlers[ats] || handlers.generic;
     if (fill) {
@@ -189,11 +187,17 @@
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === 'GET_JOB_INFO') {
-      sendResponse(scrapeJobInfo());
+      try {
+        sendResponse(scrapeJobInfo());
+      } catch (err) {
+        sendResponse({ error: err.message });
+      }
       return false;
     }
     if (msg.type === 'FILL_FORM') {
-      fillForm(msg.coverLetter).then(() => sendResponse({ ok: true }));
+      fillForm(msg.coverLetter)
+        .then(() => sendResponse({ ok: true }))
+        .catch(err => sendResponse({ error: err.message }));
       return true;
     }
   });

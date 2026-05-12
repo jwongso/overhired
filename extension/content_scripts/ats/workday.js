@@ -13,6 +13,8 @@
 (function () {
   'use strict';
 
+  if (!window.__overhiredCommon) { console.error('[overhired] common.js must load before workday.js'); return; }
+
   const { setValue, waitFor, fillCoverLetterTextarea } = window.__overhiredCommon;
 
   async function fill(profile, coverLetter) {

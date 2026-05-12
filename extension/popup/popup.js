@@ -92,15 +92,16 @@ function GenerateTab({ job, settings, resumeLoaded }) {
       if (resp.error) throw new Error(resp.error);
       setResult(resp);
       setStatus('done');
-      // Auto-save
-      const saveResp = await sendMsg({
+      // Auto-save — non-fatal: a save failure must not erase the generated result
+      sendMsg({
         type: 'SAVE',
         company: job.company,
         role:    job.title,
         coverMd:   resp.cover_letter_md,
         coverHtml: resp.cover_letter_html,
-      });
-      if (saveResp?.md_path) setSavedPaths(saveResp);
+      }).then(saveResp => {
+        if (saveResp?.md_path) setSavedPaths(saveResp);
+      }).catch(err => console.warn('[overhired] Auto-save failed:', err.message));
     } catch (e) {
       setErrMsg(e.message);
       setStatus('error');
@@ -109,10 +110,20 @@ function GenerateTab({ job, settings, resumeLoaded }) {
 
   const fillForm = useCallback(async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    chrome.tabs.sendMessage(tab.id, {
-      type: 'FILL_FORM',
-      coverLetter: result?.cover_letter_md || '',
-    });
+    if (!tab?.id) { setErrMsg('Could not access the active tab.'); return; }
+    try {
+      const resp = await chrome.tabs.sendMessage(tab.id, {
+        type: 'FILL_FORM',
+        coverLetter: result?.cover_letter_md || '',
+      });
+      if (resp?.error) setErrMsg('Fill form: ' + resp.error);
+    } catch (err) {
+      setErrMsg(
+        err.message?.includes('Receiving end does not exist')
+          ? 'Content script not ready — refresh the job page and try again.'
+          : 'Fill form failed: ' + err.message
+      );
+    }
   }, [result]);
 
   return html`
@@ -374,7 +385,7 @@ function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload  = () => resolve(reader.result.split(',')[1]);
-    reader.onerror = reject;
+    reader.onerror = () => reject(new Error('Failed to read PDF file'));
     reader.readAsDataURL(file);
   });
 }

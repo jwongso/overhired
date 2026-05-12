@@ -118,5 +118,5 @@ def load() -> dict[str, Any]:
         print(f"[overhired] WARNING: could not parse {path}: {exc}", file=sys.stderr)
 
     # Expand ~ in output_dir
-    cfg["output_dir"] = str(Path(str(cfg["output_dir"])).expanduser())
+    cfg["output_dir"] = str(Path(cfg["output_dir"]).expanduser())
     return cfg

@@ -221,7 +221,10 @@ def _md_to_html(cover_md: str, company: str, role: str) -> str:
     egg_comment = ""
     md_body = cover_md
 
-    comment_match = re.search(r"\n*(<!--.*?-->)\s*$", cover_md, re.DOTALL)
+    # Match the last HTML comment in the document — must be anchored at end.
+    # Pattern avoids greedy matching across multiple comments by requiring no '-->'
+    # inside the comment body (standard HTML comment constraint).
+    comment_match = re.search(r"\n(<!--(?:[^-]|-(?!->))*-->)\s*$", cover_md)
     if comment_match:
         egg_comment = "\n" + comment_match.group(1)
         md_body = cover_md[: comment_match.start()]

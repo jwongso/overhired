@@ -51,7 +51,7 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "wasm/mupdf.wasm",
+        "wasm/mupdf-wasm.wasm",
         "wasm/mupdf.js",
         "wasm/mupdf-wasm.js"
       ],

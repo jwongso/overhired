@@ -290,11 +290,10 @@ function SettingsTab({ settings, onSave, onResumeLoaded }) {
     if (!file || !file.name.endsWith('.pdf')) return;
     setRStatus('loading');
     try {
-      const text = await sendMsg({ type: 'PARSE_PDF', fileData: await fileToBase64(file) });
-      if (text?.error) throw new Error(text.error);
-      await store({ [STORAGE_KEYS.resume]: text.resumeText });
+      const resumeText = await parsePdfLocally(file);
+      await store({ [STORAGE_KEYS.resume]: resumeText });
       setRStatus('loaded');
-      onResumeLoaded?.(true);   // propagate to App so Generate button unlocks
+      onResumeLoaded?.(true);
     } catch (e) {
       setRStatus('error: ' + e.message);
     }
@@ -492,13 +491,26 @@ function App() {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload  = () => resolve(reader.result.split(',')[1]);
-    reader.onerror = () => reject(new Error('Failed to read PDF file'));
-    reader.readAsDataURL(file);
-  });
+async function parsePdfLocally(file) {
+  const wasmUrl = chrome.runtime.getURL('wasm/mupdf.js');
+  const mod     = await import(wasmUrl);
+  const mupdf   = await mod.default();
+
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const doc   = mupdf.Document.openDocument(bytes, 'application/pdf');
+  const pages = doc.countPages();
+  const parts = [];
+
+  for (let i = 0; i < pages; i++) {
+    const page = doc.loadPage(i);
+    try   { parts.push(page.toStructuredText('preserve-whitespace').asText()); }
+    finally { page.destroy(); }
+  }
+  doc.destroy();
+
+  const text = parts.join('\n\n').trim();
+  if (!text) throw new Error('Could not extract text from PDF (may be image-only).');
+  return text;
 }
 
 // ── Mount ─────────────────────────────────────────────────────────────────────

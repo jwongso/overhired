@@ -6,8 +6,6 @@
 generates personalized cover letters using AI, and auto-fills ATS application forms —
 so you can apply faster, to more roles, across more countries.
 
-![overhired demo](docs/screenshots/demo.gif)
-
 ---
 
 ## Features
@@ -15,7 +13,7 @@ so you can apply faster, to more roles, across more countries.
 - **One-click extraction** — reads job title, company and full description from any page
 - **AI cover letter** — personalized to your resume and the specific role
 - **Per-job instructions** — type extra context before generating ("mention I need visa sponsorship")
-- **ATS form filler** — auto-fills name, email, address, cover letter on Greenhouse, Ashby and Workable
+- **ATS form filler** — auto-fills name, email, address, cover letter on Greenhouse, Ashby, Workable, Workday, Lever, SmartRecruiters, iCIMS and SAP SuccessFactors
 - **Local-first AI** — defaults to [Ollama](https://ollama.com) / llama.cpp; OpenAI and Claude are optional
 - **Privacy by design** — your resume never leaves your device; only the job description reaches the AI
 - **Markdown + HTML output** — saved to `output/<company>/<role>/cover_letter.{md,html}`
@@ -168,7 +166,7 @@ that processes your application:
 -->
 ```
 
-Off by default. The message is user-editable.
+Off by default. The message is user-editable from the Settings → 🤖 Easter Egg section.
 
 ---
 

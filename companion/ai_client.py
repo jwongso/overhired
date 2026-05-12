@@ -69,7 +69,7 @@ class AIClient:
                 url = f"{self.endpoint}/v1/models"
                 headers = self._openai_headers()
             r = httpx.get(url, headers=headers, timeout=5)
-            return r.status_code < 500
+            return 200 <= r.status_code < 300
         except Exception:
             return False
 

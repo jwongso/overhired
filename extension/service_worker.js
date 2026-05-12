@@ -7,7 +7,18 @@
  *   PARSE_PDF  → load MuPDF WASM, extract text from base64 PDF
  */
 
-const COMPANION = 'http://localhost:7878';
+const COMPANION_DEFAULT = 'http://localhost:7878';
+
+/** Build headers for companion requests, injecting auth token when configured. */
+function companionHeaders(settings) {
+  const h = { 'Content-Type': 'application/json' };
+  if (settings?.companion_token) h['X-Overhired-Token'] = settings.companion_token;
+  return h;
+}
+
+function companionUrl(settings) {
+  return (settings?.companion_url || COMPANION_DEFAULT).replace(/\/$/, '');
+}
 
 // ── Message router ────────────────────────────────────────────────────────────
 
@@ -41,12 +52,18 @@ async function handleGenerate(msg) {
     user_profile:         userProfile,
     global_instructions:  settings?.global_instructions || '',
     per_job_instructions: perJobInstructions || '',
-    easter_egg:           settings?.easter_egg || false,
+    easter_egg:           settings?.easter_egg      || false,
+    easter_egg_text:      settings?.easter_egg_text || null,
+    // Forward extension AI settings to companion so the UI controls generation.
+    ai_provider:          settings?.provider  || null,
+    ai_endpoint:          settings?.endpoint  || null,
+    ai_model:             settings?.model     || null,
+    ai_key:               settings?.api_key   || null,
   };
 
-  const resp = await fetch(`${COMPANION}/generate`, {
+  const resp = await fetch(`${companionUrl(settings)}/generate`, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: companionHeaders(settings),
     body:    JSON.stringify(body),
   });
 
@@ -61,10 +78,10 @@ async function handleGenerate(msg) {
 // ── SAVE ──────────────────────────────────────────────────────────────────────
 
 async function handleSave(msg) {
-  const { company, role, coverMd, coverHtml } = msg;
-  const resp = await fetch(`${COMPANION}/save`, {
+  const { company, role, coverMd, coverHtml, settings } = msg;
+  const resp = await fetch(`${companionUrl(settings)}/save`, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: companionHeaders(settings),
     body:    JSON.stringify({
       company,
       role,

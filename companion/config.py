@@ -35,6 +35,10 @@ else:
 DEFAULTS: dict[str, Any] = {
     "output_dir": "~/Documents/job-applications",
     "companion_port": 7878,
+    # Shared secret token.  If non-empty the companion requires every request
+    # to carry  X-Overhired-Token: <value>.  Copy this value to the extension's
+    # Settings → Companion Token field.  Leave empty to disable auth (dev only).
+    "auth_token": "",
     "ai": {
         "provider": "ollama",       # ollama | openai | claude
         "endpoint": "http://localhost:11434",

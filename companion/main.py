@@ -17,6 +17,7 @@ Endpoints:
 from __future__ import annotations
 
 import argparse
+import html as _html
 import re
 import sys
 import textwrap
@@ -25,7 +26,7 @@ from typing import Optional
 
 import markdown as md_lib
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -39,13 +40,28 @@ AI  = ai_module.AIClient(CFG["ai"])
 
 app = FastAPI(title="overhired companion", version="1.0.0")
 
-# Allow the browser extension (chrome-extension:// origin) to call us.
+# Allow the browser extension (chrome-extension:// / moz-extension://) to call
+# us.  Restricting to extension-scheme origins prevents arbitrary web pages from
+# using the companion as a file-write or AI-proxy primitive.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],     # Extension origin varies by browser/ID; wildcard is fine for localhost
+    allow_origin_regex=r"chrome-extension://[\w-]+|moz-extension://[\w-]+",
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+
+def _require_token(x_overhired_token: Optional[str] = Header(default=None)) -> None:
+    """Reject requests that don't carry the configured shared secret.
+
+    Only enforced when ``auth_token`` is set in config.toml.  Leave it empty
+    during initial setup; set it to a random string once you're ready to lock
+    things down, then copy the same value to the extension's Settings.
+    """
+    expected = CFG.get("auth_token", "")
+    if expected and x_overhired_token != expected:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Overhired-Token")
 
 
 # ── Request / Response models ─────────────────────────────────────────────────
@@ -60,6 +76,12 @@ class GenerateRequest(BaseModel):
     per_job_instructions: str           = ""
     easter_egg:           bool          = False
     easter_egg_text:      Optional[str] = None
+    # Optional per-request AI override from extension settings.
+    # When provided these take precedence over the companion's config.toml.
+    ai_provider:          Optional[str] = None
+    ai_endpoint:          Optional[str] = None
+    ai_model:             Optional[str] = None
+    ai_key:               Optional[str] = None
 
 
 class GenerateResponse(BaseModel):
@@ -72,7 +94,9 @@ class SaveRequest(BaseModel):
     role:              str
     cover_letter_md:   str
     cover_letter_html: str
-    output_dir:        Optional[str] = None   # overrides config if provided
+    # output_dir intentionally removed from the public API — the companion
+    # always writes under its configured output_dir to prevent arbitrary
+    # file writes by any caller.
 
 
 class SaveResponse(BaseModel):
@@ -95,12 +119,24 @@ def health():
 
 
 @app.post("/generate", response_model=GenerateResponse)
-def generate(req: GenerateRequest):
+def generate(req: GenerateRequest, _: None = Depends(_require_token)):
     system_prompt = _build_system_prompt()
     user_prompt   = _build_user_prompt(req)
 
+    # Build a per-request AIClient when the extension overrides provider/model/
+    # endpoint/key; otherwise reuse the global client to avoid the overhead of
+    # constructing a new one on every request.
+    ai = AI
+    if req.ai_provider or req.ai_model or req.ai_endpoint:
+        override = dict(CFG["ai"])
+        if req.ai_provider: override["provider"] = req.ai_provider
+        if req.ai_endpoint: override["endpoint"] = req.ai_endpoint.rstrip("/")
+        if req.ai_model:    override["model"]    = req.ai_model
+        if req.ai_key:      override["api_key"]  = req.ai_key
+        ai = ai_module.AIClient(override)
+
     try:
-        raw = AI.generate(system_prompt, user_prompt)
+        raw = ai.generate(system_prompt, user_prompt)
     except ai_module.AIError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
@@ -121,8 +157,8 @@ def generate(req: GenerateRequest):
 
 
 @app.post("/save", response_model=SaveResponse)
-def save(req: SaveRequest):
-    out_root = Path(req.output_dir or CFG["output_dir"]).expanduser()
+def save(req: SaveRequest, _: None = Depends(_require_token)):
+    out_root = Path(CFG["output_dir"]).expanduser()
     company  = _safe_name(req.company)
     role     = _safe_name(req.role)
     dest     = out_root / company / role
@@ -233,8 +269,8 @@ def _md_to_html(cover_md: str, company: str, role: str) -> str:
     full_body = body_html + egg_comment
 
     return _HTML_TEMPLATE.format(
-        company=company,
-        role=role,
+        company=_html.escape(company),
+        role=_html.escape(role),
         body=full_body,
     )
 

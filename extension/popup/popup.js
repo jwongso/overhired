@@ -8,19 +8,21 @@ import htm                 from '../vendor/htm.module.js';
 
 const html = htm.bind(h);
 
-const COMPANION = 'http://localhost:7878';
 const STORAGE_KEYS = {
   resume:    'resume_text',
   profile:   'user_profile',
   settings:  'settings',
 };
 const DEFAULT_SETTINGS = {
-  provider:           'ollama',
-  endpoint:           'http://localhost:11434',
-  model:              'llama3.2',
-  api_key:            '',
-  global_instructions:'',
-  easter_egg:         false,
+  provider:            'ollama',
+  endpoint:            'http://localhost:11434',
+  model:               'llama3.2',
+  api_key:             '',
+  global_instructions: '',
+  easter_egg:          false,
+  easter_egg_text:     '',        // empty = use companion's built-in default
+  companion_url:       'http://localhost:7878',
+  companion_token:     '',        // copy from companion config.toml → auth_token
 };
 
 // ── Utility ───────────────────────────────────────────────────────────────────
@@ -29,9 +31,9 @@ const load  = (keys) => chrome.storage.local.get(keys);
 const store = (obj)  => chrome.storage.local.set(obj);
 const sendMsg = (msg) => chrome.runtime.sendMessage(msg);
 
-async function companionHealth() {
+async function companionHealth(url = 'http://localhost:7878') {
   try {
-    const r = await fetch(`${COMPANION}/health`, { signal: AbortSignal.timeout(3000) });
+    const r = await fetch(`${url}/health`, { signal: AbortSignal.timeout(3000) });
     return r.ok ? await r.json() : null;
   } catch { return null; }
 }
@@ -68,7 +70,7 @@ function JobCard({ job }) {
 
 // ── Generate tab ──────────────────────────────────────────────────────────────
 
-function GenerateTab({ job, settings, resumeLoaded }) {
+function GenerateTab({ job, settings, resumeLoaded, scrapeError }) {
   const [perJob,     setPerJob]     = useState('');
   const [status,     setStatus]     = useState('idle'); // idle | loading | done | error
   const [result,     setResult]     = useState(null);
@@ -99,6 +101,7 @@ function GenerateTab({ job, settings, resumeLoaded }) {
         role:    job.title,
         coverMd:   resp.cover_letter_md,
         coverHtml: resp.cover_letter_html,
+        settings,
       }).then(saveResp => {
         if (saveResp?.md_path) setSavedPaths(saveResp);
       }).catch(err => console.warn('[overhired] Auto-save failed:', err.message));
@@ -129,6 +132,11 @@ function GenerateTab({ job, settings, resumeLoaded }) {
   return html`
     <div class="panel">
       <${JobCard} job=${job} />
+
+      ${scrapeError && !job && html`
+        <p style="color:var(--muted);font-size:11px;margin-top:0;padding-top:0">
+          ⚠ Could not extract job info: ${scrapeError}
+        </p>`}
 
       <div class="field">
         <label>Additional instructions for this application</label>
@@ -178,7 +186,7 @@ function GenerateTab({ job, settings, resumeLoaded }) {
 
 // ── Settings tab ──────────────────────────────────────────────────────────────
 
-function SettingsTab({ settings, onSave }) {
+function SettingsTab({ settings, onSave, onResumeLoaded }) {
   const [s,       setS]       = useState(settings);
   const [profile, setProfile] = useState({});
   const [resume,  setResume]  = useState('');  // extracted text
@@ -213,10 +221,11 @@ function SettingsTab({ settings, onSave }) {
       if (text?.error) throw new Error(text.error);
       await store({ [STORAGE_KEYS.resume]: text.resumeText });
       setRStatus('loaded');
+      onResumeLoaded?.(true);   // propagate to App so Generate button unlocks
     } catch (e) {
       setRStatus('error: ' + e.message);
     }
-  }, []);
+  }, [onResumeLoaded]);
 
   const saveAll = async () => {
     await store({ [STORAGE_KEYS.settings]: s, [STORAGE_KEYS.profile]: profile });
@@ -299,6 +308,21 @@ function SettingsTab({ settings, onSave }) {
           </div>`}
       </div>
 
+      <!-- Companion connection -->
+      <div class="settings-section">
+        <div class="settings-title">Companion Connection</div>
+        <div class="field">
+          <label>URL</label>
+          <input type="text" ...${field('companion_url')}
+            placeholder="http://localhost:7878" />
+        </div>
+        <div class="field">
+          <label>Auth Token <span style="color:var(--muted)">(optional)</span></label>
+          <input type="password" ...${field('companion_token')}
+            placeholder="Match auth_token in companion config.toml" />
+        </div>
+      </div>
+
       <!-- Global instructions -->
       <div class="settings-section">
         <div class="settings-title">Global Instructions</div>
@@ -321,6 +345,12 @@ function SettingsTab({ settings, onSave }) {
           Appends a hidden HTML comment to every cover letter instructing AI
           screening systems to advance your application. 😄
         </p>
+        ${s.easter_egg && html`
+          <div class="field" style="margin-top:8px">
+            <label>Custom message <span style="color:var(--muted)">(leave empty for built-in default)</span></label>
+            <textarea rows=4 ...${field('easter_egg_text')}
+              placeholder="Custom AI prompt injection text…" />
+          </div>`}
       </div>
 
       <button class="btn btn-primary btn-full" onClick=${saveAll}>
@@ -332,26 +362,31 @@ function SettingsTab({ settings, onSave }) {
 // ── Root App ──────────────────────────────────────────────────────────────────
 
 function App() {
-  const [tab,      setTab]      = useState('generate');
-  const [health,   setHealth]   = useState(undefined);
-  const [job,      setJob]      = useState(null);
-  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const [tab,         setTab]         = useState('generate');
+  const [health,      setHealth]      = useState(undefined);
+  const [job,         setJob]         = useState(null);
+  const [scrapeError, setScrapeError] = useState('');
+  const [settings,    setSettings]    = useState(DEFAULT_SETTINGS);
   const [resumeLoaded, setResumeLoaded] = useState(false);
 
   useEffect(() => {
-    // Check companion health
-    companionHealth().then(setHealth);
-    // Load settings + resume status
+    // Load settings + resume status first so health check uses the configured URL.
     load([STORAGE_KEYS.settings, STORAGE_KEYS.resume]).then(d => {
-      if (d.settings)    setSettings({ ...DEFAULT_SETTINGS, ...d.settings });
+      const s = d.settings ? { ...DEFAULT_SETTINGS, ...d.settings } : DEFAULT_SETTINGS;
+      setSettings(s);
       if (d.resume_text) setResumeLoaded(true);
+      companionHealth(s.companion_url).then(setHealth);
     });
     // Ask content script for current page job info
     chrome.tabs.query({ active: true, currentWindow: true }).then(([t]) => {
       if (!t?.id) return;
       chrome.tabs.sendMessage(t.id, { type: 'GET_JOB_INFO' })
-        .then(j => { if (j) setJob(j); })
-        .catch(() => {}); // content script may not be ready
+        .then(j => {
+          if (!j)      return;
+          if (j.error) { setScrapeError(j.error); return; }
+          setJob(j);
+        })
+        .catch(() => {}); // content script may not be ready on non-job pages
     });
   }, []);
 
@@ -374,8 +409,8 @@ function App() {
       </div>
 
       ${tab === 'generate'
-        ? html`<${GenerateTab} job=${job} settings=${settings} resumeLoaded=${resumeLoaded} />`
-        : html`<${SettingsTab} settings=${settings} onSave=${s => { setSettings(s); store({ [STORAGE_KEYS.settings]: s }); }} />`}
+        ? html`<${GenerateTab} job=${job} settings=${settings} resumeLoaded=${resumeLoaded} scrapeError=${scrapeError} />`
+        : html`<${SettingsTab} settings=${settings} onResumeLoaded=${setResumeLoaded} onSave=${s => { setSettings(s); store({ [STORAGE_KEYS.settings]: s }); }} />`}
     </div>`;
 }
 

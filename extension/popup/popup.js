@@ -292,6 +292,18 @@ function SettingsTab({ settings, onSave, onResumeLoaded }) {
     try {
       const resumeText = await parsePdfLocally(file);
       await store({ [STORAGE_KEYS.resume]: resumeText });
+
+      // Auto-fill profile fields that are still empty
+      const detected = extractProfileFromResume(resumeText);
+      setProfile(prev => {
+        const merged = { ...prev };
+        for (const [k, v] of Object.entries(detected)) {
+          if (!merged[k] && v) merged[k] = v;
+        }
+        store({ [STORAGE_KEYS.profile]: merged });
+        return merged;
+      });
+
       setRStatus('loaded');
       onResumeLoaded?.(true);
     } catch (e) {
@@ -323,7 +335,7 @@ function SettingsTab({ settings, onSave, onResumeLoaded }) {
             ? document.getElementById('pdf-input').click()
             : openUploadTab()}
         >
-          ${rStatus === 'loaded'  ? (IN_FULL_TAB ? 'Resume loaded - click to replace' : 'Resume loaded - click to update') :
+          ${rStatus === 'loaded'  ? (IN_FULL_TAB ? 'Resume loaded - profile fields auto-filled below' : 'Resume loaded - click to update') :
             rStatus === 'loading' ? 'Parsing PDF...' :
             rStatus.startsWith('error') ? `${rStatus}` :
             IN_FULL_TAB ? 'Drop your resume PDF here or click to select'
@@ -493,6 +505,35 @@ function App() {
 }
 
 // -- Helpers -------------------------------------------------------------------
+
+function extractProfileFromResume(text) {
+  const out = {};
+
+  const emailM = text.match(/\b([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})\b/);
+  if (emailM) out.email = emailM[1];
+
+  // International phones: +62-xxx, +64 xx, (021) xxx, etc.
+  const phoneM = text.match(
+    /(?:\+\d{1,3}[\s.\-]?)?(?:\(?\d{2,4}\)?[\s.\-]?)?\d{3,4}[\s.\-]?\d{3,4}(?:[\s.\-]?\d{2,4})?/
+  );
+  if (phoneM) out.phone = phoneM[0].trim();
+
+  const liM = text.match(/linkedin\.com\/in\/([\w\-]+)/i);
+  if (liM) out.linkedin = `https://linkedin.com/in/${liM[1]}`;
+
+  const ghM = text.match(/github\.com\/([\w\-]+)/i);
+  if (ghM) out.github = `https://github.com/${ghM[1]}`;
+
+  // Name heuristic: first short line (2-4 words, each Title-case, no digits)
+  for (const line of text.split('\n').map(l => l.trim()).slice(0, 8)) {
+    if (/^[A-Z][a-zA-Z'\-]+(?: [A-Z][a-zA-Z'\-]+){1,3}$/.test(line)) {
+      out.name = line;
+      break;
+    }
+  }
+
+  return out;
+}
 
 async function parsePdfLocally(file) {
   const wasmUrl = chrome.runtime.getURL('wasm/mupdf.js');

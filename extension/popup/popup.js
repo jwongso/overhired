@@ -512,19 +512,20 @@ function extractProfileFromResume(text) {
   const emailM = text.match(/\b([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})\b/);
   if (emailM) out.email = emailM[1];
 
-  // International phones: +62-xxx, +64 xx, (021) xxx, etc.
-  const phoneM = text.match(
-    /(?:\+\d{1,3}[\s.\-]?)?(?:\(?\d{2,4}\)?[\s.\-]?)?\d{3,4}[\s.\-]?\d{3,4}(?:[\s.\-]?\d{2,4})?/
-  );
+  // International: +64 204 770601, +1-800-555-0100, etc. then local fallback
+  const phoneM = text.match(/\+\d{1,3}[\s\-.]?\(?\d{1,4}\)?[\s\-.]?\d{6,10}/)
+              || text.match(/\b\(?\d{2,4}\)?[\s.\-]?\d{3,4}[\s.\-]?\d{4}\b/);
   if (phoneM) out.phone = phoneM[0].trim();
 
-  const liM = text.match(/linkedin\.com\/in\/([\w\-]+)/i);
+  // Full URL (linkedin.com/in/user) or short form (in/user) preceded by whitespace
+  const liM = text.match(/linkedin\.com\/in\/([\w\-]+)/i)
+           || text.match(/(?:^|\s)in\/([\w\-]+)/m);
   if (liM) out.linkedin = `https://linkedin.com/in/${liM[1]}`;
 
   const ghM = text.match(/github\.com\/([\w\-]+)/i);
   if (ghM) out.github = `https://github.com/${ghM[1]}`;
 
-  // Name heuristic: first short line (2-4 words, each Title-case, no digits)
+  // Name heuristic: first short line (2-4 Title-case words, no digits)
   for (const line of text.split('\n').map(l => l.trim()).slice(0, 8)) {
     if (/^[A-Z][a-zA-Z'\-]+(?: [A-Z][a-zA-Z'\-]+){1,3}$/.test(line)) {
       out.name = line;

@@ -58,20 +58,28 @@ class AIClient:
             return self._claude(system_prompt, user_prompt)
         return self._openai_compatible(system_prompt, user_prompt)
 
-    def health_check(self) -> bool:
-        """Return True if the endpoint responds to a lightweight probe."""
+    def health_check(self) -> tuple[bool, str]:
+        """Return (is_reachable, model_name).
+
+        Queries /v1/models to both verify reachability and discover the
+        actual model name served by the endpoint. Falls back to the
+        configured model name when the endpoint is unreachable or the
+        response shape is unexpected.
+        """
         try:
-            if self.provider == "claude":
-                url = f"{self.endpoint}/v1/models"
-                headers = {"x-api-key": self.api_key,
-                           "anthropic-version": CLAUDE_API_VERSION}
-            else:
-                url = f"{self.endpoint}/v1/models"
-                headers = self._openai_headers()
-            r = httpx.get(url, headers=headers, timeout=5)
-            return 200 <= r.status_code < 300
+            headers = (
+                {"x-api-key": self.api_key, "anthropic-version": CLAUDE_API_VERSION}
+                if self.provider == "claude"
+                else self._openai_headers()
+            )
+            r = httpx.get(f"{self.endpoint}/v1/models", headers=headers, timeout=5)
+            if 200 <= r.status_code < 300:
+                models = r.json().get("data", [])
+                model_name = models[0].get("id", self.model) if models else self.model
+                return True, model_name
         except Exception:
-            return False
+            pass
+        return False, self.model
 
     # ── OpenAI-compatible (Ollama, llama.cpp, OpenAI) ────────────────────────
 

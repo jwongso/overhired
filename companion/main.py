@@ -108,12 +108,12 @@ class SaveResponse(BaseModel):
 
 @app.get("/health")
 def health():
-    ai_ok = AI.health_check()
+    ai_ok, ai_model = AI.health_check()
     return {
-        "status":     "ok",
-        "ai_provider": CFG["ai"]["provider"],
-        "ai_model":    CFG["ai"]["model"],
-        "ai_endpoint": CFG["ai"]["endpoint"],
+        "status":      "ok",
+        "ai_provider":  CFG["ai"]["provider"],
+        "ai_model":     ai_model,
+        "ai_endpoint":  CFG["ai"]["endpoint"],
         "ai_reachable": ai_ok,
     }
 

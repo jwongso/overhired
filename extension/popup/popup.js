@@ -100,12 +100,14 @@ function CompanionBanner({ health }) {
   if (health === undefined) return null; // still checking
   if (health) {
     const isLocal = health.ai_endpoint?.includes('localhost') || health.ai_endpoint?.includes('127.0.0.1');
-    const providerLabel = health.ai_provider === 'claude' ? 'Claude'
+    const providerLabel = health.ai_provider === 'claude'  ? 'Anthropic'
       : health.ai_provider === 'ollama' ? 'Ollama'
       : isLocal ? 'local LLM'
       : 'OpenAI';
+    const modelName  = (health.ai_model || '').replace(/\.gguf$/i, '').replace(/^local$/, '');
+    const modelLabel = modelName ? ` · ${modelName}` : '';
     const ai = health.ai_reachable
-      ? providerLabel
+      ? `${providerLabel}${modelLabel}`
       : `${providerLabel} · ⚠ not reachable`;
     return html`<div class="banner ok">✓ Companion running · ${ai}</div>`;
   }

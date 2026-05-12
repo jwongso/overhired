@@ -36,6 +36,8 @@
         "content_scripts/ats/greenhouse.js",
         "content_scripts/ats/ashby.js",
         "content_scripts/ats/workable.js",
+        "content_scripts/ats/icims.js",
+        "content_scripts/ats/successfactors.js",
         "content_scripts/ats/generic.js",
         "content_scripts/extractor.js"
       ],

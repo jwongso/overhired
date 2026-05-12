@@ -118,9 +118,11 @@ Browser Extension
 | **Greenhouse** | ✅ v1.0 | Cleanest DOM; most reliable |
 | **Ashby** | ✅ v1.0 | React SPA; uses MutationObserver |
 | **Workable** | ✅ v1.0 | Multi-step form; name + email + cover letter |
-| SmartRecruiters | planned v1.1 | |
-| iCIMS | planned v1.1 | |
-| LinkedIn Easy Apply | planned v1.1 | |
+| **iCIMS** | ✅ v1.1 | Classic + modern layouts; cross-origin iframe portals unsupported |
+| **SAP SuccessFactors** | ✅ v1.1 | Angular SPA; `data-automation-id` + label-based |
+| SmartRecruiters | planned v1.2 | |
+| Lever | planned v1.2 | |
+| LinkedIn Easy Apply | planned v1.2 | |
 
 ---
 

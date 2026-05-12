@@ -22,6 +22,7 @@
     { name: 'smartrecruiters', pattern: /smartrecruiters\.com/i },
     { name: 'lever',           pattern: /lever\.co/i },
     { name: 'icims',           pattern: /icims\.com/i },
+    { name: 'successfactors',  pattern: /successfactors\.com|successfactors\.eu|sapsf\.com/i },
   ];
 
   function detectATS() {

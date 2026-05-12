@@ -127,25 +127,29 @@ function CompanionBanner({ health }) {
     </div>`;
 }
 
-function JobCard({ job }) {
-  if (!job) return html`<div class="job-card"><div class="job-meta">Open a job posting to begin.</div></div>`;
-  return html`
-    <div class="job-card">
-      <div class="job-title">${job.title || '(title not detected)'}</div>
-      <div class="job-meta">${job.company || ''} ${job.location ? ' - ' + job.location : ''}</div>
-    </div>`;
-}
 
 // -- Generate tab --------------------------------------------------------------
 
 function GenerateTab({ job, settings, resumeLoaded, scrapeError }) {
+  const [title,      setTitle]      = useState('');
+  const [company,    setCompany]    = useState('');
+  const [desc,       setDesc]       = useState('');
+  const [showDesc,   setShowDesc]   = useState(false);
   const [perJob,     setPerJob]     = useState('');
   const [status,     setStatus]     = useState('idle'); // idle | loading | done | error
   const [result,     setResult]     = useState(null);
   const [errMsg,     setErrMsg]     = useState('');
   const [savedPaths, setSavedPaths] = useState(null);
 
-  const canGenerate = job && resumeLoaded && status !== 'loading';
+  // Pre-fill editable fields from scraped job when it arrives
+  useEffect(() => {
+    if (!job) return;
+    if (job.title)       setTitle(t  => t  || job.title);
+    if (job.company)     setCompany(c => c  || job.company);
+    if (job.description) setDesc(d   => d   || job.description);
+  }, [job]);
+
+  const canGenerate = resumeLoaded && status !== 'loading';
 
   const generate = useCallback(async () => {
     setStatus('loading');
@@ -155,18 +159,18 @@ function GenerateTab({ job, settings, resumeLoaded, scrapeError }) {
     try {
       const resp = await sendMsg({
         type: 'GENERATE',
-        job,
+        job:  { title, company, description: desc, ats: job?.ats || 'generic' },
         perJobInstructions: perJob,
         settings,
       });
       if (resp.error) throw new Error(resp.error);
       setResult(resp);
       setStatus('done');
-      // Auto-save - non-fatal: a save failure must not erase the generated result
+      // Auto-save - non-fatal
       sendMsg({
         type: 'SAVE',
-        company: job.company,
-        role:    job.title,
+        company,
+        role:    title,
         coverMd:   resp.cover_letter_md,
         coverHtml: resp.cover_letter_html,
         settings,
@@ -177,7 +181,7 @@ function GenerateTab({ job, settings, resumeLoaded, scrapeError }) {
       setErrMsg(e.message);
       setStatus('error');
     }
-  }, [job, perJob, settings]);
+  }, [title, company, desc, perJob, settings, job]);
 
   const fillForm = useCallback(async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -199,21 +203,37 @@ function GenerateTab({ job, settings, resumeLoaded, scrapeError }) {
 
   return html`
     <div class="panel">
-      <${JobCard} job=${job} />
       <${FengShuiPanel} />
 
-      ${scrapeError && !job && html`
-        <p style="color:var(--muted);font-size:11px;margin-top:0;padding-top:0">
-          Could not extract job info: ${scrapeError}
-        </p>`}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+        <div class="field" style="margin-bottom:0">
+          <label>Role</label>
+          <input type="text" value=${title} onInput=${e => setTitle(e.target.value)}
+            placeholder="e.g. Senior Software Engineer" />
+        </div>
+        <div class="field" style="margin-bottom:0">
+          <label>Company</label>
+          <input type="text" value=${company} onInput=${e => setCompany(e.target.value)}
+            placeholder="e.g. Acme Corp" />
+        </div>
+      </div>
 
       <div class="field">
-        <label>Additional instructions for this application</label>
+        <label style="cursor:pointer" onClick=${() => setShowDesc(v => !v)}>
+          Job Description ${desc ? '(loaded)' : '(optional)'} ${showDesc ? '[hide]' : '[show]'}
+        </label>
+        ${showDesc && html`
+          <textarea rows=5 value=${desc} onInput=${e => setDesc(e.target.value)}
+            placeholder="Paste the job description here..." />`}
+      </div>
+
+      <div class="field">
+        <label>Notes for this application</label>
         <textarea
           placeholder="e.g. Mention I'm willing to relocate but need visa sponsorship."
           value=${perJob}
           onInput=${e => setPerJob(e.target.value)}
-          rows=3
+          rows=2
         />
       </div>
 
@@ -225,7 +245,7 @@ function GenerateTab({ job, settings, resumeLoaded, scrapeError }) {
         >
           ${status === 'loading'
             ? html`<span class="spinner"></span> Generating...`
-            : 'Extract & Generate'}
+            : 'Generate Cover Letter'}
         </button>
         ${result && html`
           <button class="btn btn-secondary" onClick=${fillForm} title="Fill ATS form">
@@ -236,6 +256,11 @@ function GenerateTab({ job, settings, resumeLoaded, scrapeError }) {
       ${!resumeLoaded && html`
         <p style="color:var(--muted);font-size:11px;margin-top:8px">
           No resume loaded - go to Settings to upload your PDF.
+        </p>`}
+
+      ${scrapeError && !job && html`
+        <p style="color:var(--muted);font-size:11px;margin-top:4px">
+          Could not auto-detect job info: ${scrapeError}
         </p>`}
 
       ${status === 'error' && html`

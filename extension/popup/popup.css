@@ -247,10 +247,9 @@ input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px;
 .fengshui-type  { font-weight: 600; font-size: 11px; }
 .fengshui-badge {
   margin-left: auto;
-  font-size: 9px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: .5px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .3px;
   color: var(--muted);
 }
 .fengshui-row   { display: flex; gap: 4px; line-height: 1.7; flex-wrap: wrap; }

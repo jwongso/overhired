@@ -54,7 +54,7 @@ function FengShuiPanel() {
       <div class="fengshui-header">
         <span class="fengshui-dot" style="background:${color}"></span>
         <span class="fengshui-type" style="color:${color}">${TYPE_LABEL[day.type]}</span>
-        <span class="fengshui-badge">fengshui</span>
+        <span class="fengshui-badge">风水 feng shui</span>
       </div>
       ${day.type !== 'unlucky' && day.favourable.length > 0 && html`
         <div class="fengshui-row">

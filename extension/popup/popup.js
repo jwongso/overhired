@@ -40,11 +40,14 @@ function FengShuiPanel() {
   const TYPE_COLOR = { lucky: '#4caf7d', ordinary: '#f59e0b', unlucky: '#e05252' };
   const TYPE_LABEL = { lucky: 'Lucky Day', ordinary: 'Ordinary Day', unlucky: 'Unlucky Day' };
   const color    = TYPE_COLOR[day.type];
-  const bestDays = (best?.days || []).slice(0, 3).map(d => {
-    const [y, m, day] = d.date.split('-').map(Number);
-    return new Date(y, m - 1, day)
-      .toLocaleDateString('en', { weekday: 'short', month: 'short', day: 'numeric' });
-  });
+  const bestDays = (best?.days || [])
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(0, 3)
+    .map(d => {
+      const [y, m, day] = d.date.split('-').map(Number);
+      return new Date(y, m - 1, day)
+        .toLocaleDateString('en', { weekday: 'short', month: 'short', day: 'numeric' });
+    });
 
   return html`
     <div class="fengshui-panel">
@@ -101,6 +104,133 @@ async function companionHealth(url = 'http://localhost:7878') {
   } catch { return null; }
 }
 
+// Self-contained page scraper injected via chrome.scripting.executeScript.
+// Must NOT reference any outer variables - it is serialised and run in the page.
+function scrapeJobFromPage() {
+  const ATS_PATTERNS = [
+    { name: 'greenhouse',      pattern: /greenhouse\.io|boards\.greenhouse/i },
+    { name: 'ashby',           pattern: /ashbyhq\.com/i },
+    { name: 'workable',        pattern: /workable\.com/i },
+    { name: 'workday',         pattern: /myworkdayjobs\.com/i },
+    { name: 'lever',           pattern: /jobs\.lever\.co/i },
+    { name: 'linkedin',        pattern: /linkedin\.com\/jobs/i },
+    { name: 'smartrecruiters', pattern: /smartrecruiters\.com/i },
+    { name: 'icims',           pattern: /icims\.com/i },
+    { name: 'successfactors',  pattern: /successfactors\.com|successfactors\.eu|sapsf\.com/i },
+  ];
+
+  function detectATS() {
+    const url = window.location.href;
+    for (const { name, pattern } of ATS_PATTERNS) {
+      if (pattern.test(url)) return name;
+    }
+    return 'generic';
+  }
+
+  function meta(name) {
+    const el = document.querySelector(`meta[property="${name}"], meta[name="${name}"]`);
+    return el?.content?.trim() || '';
+  }
+
+  function stripHtml(html) {
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    return div.textContent?.trim() || '';
+  }
+
+  function findDescBlock() {
+    const selectors = [
+      '[class*="job-description"]', '[class*="jobDescription"]',
+      '[class*="job_description"]', '[id*="job-description"]',
+      '[class*="posting-body"]',    '[class*="description"]',
+      '[class*="job-detail"]',      'article', 'main',
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el) {
+        const text = el.innerText?.trim();
+        if (text && text.length > 200) return text.slice(0, 6000);
+      }
+    }
+    return document.body?.innerText?.slice(0, 6000) || '';
+  }
+
+  const info = { title: '', company: '', location: '', description: '', ats: detectATS() };
+
+  // 1. LinkedIn: parse bpr-guid hidden JSON elements
+  if (/linkedin\.com\/jobs/i.test(window.location.href)) {
+    const codeEls = document.querySelectorAll('code[id^="bpr-guid-"]');
+    for (const el of codeEls) {
+      try {
+        const parsed = JSON.parse(el.textContent);
+        for (const item of (parsed.included || [])) {
+          if (!info.title && item.$type?.includes('jobs.JobPosting') && item.title) {
+            info.title = item.title;
+            if (item.companyDetails?.name) info.company = item.companyDetails.name;
+            if (item.description?.text)    info.description = item.description.text.slice(0, 6000);
+          }
+          if (!info.location && item.$type?.includes('.Geo') && item.defaultLocalizedName) {
+            info.location = item.defaultLocalizedName;
+          }
+          if (!info.company && item.$type?.includes('organization.Company') && item.name) {
+            info.company = item.name;
+          }
+        }
+        if (info.title) break;
+      } catch { /* skip malformed */ }
+    }
+    if (!info.description) {
+      const descEl = document.querySelector('#job-details, .jobs-description-content__text');
+      if (descEl) {
+        info.description = descEl.innerText.trim()
+          .replace(/\nSee how you compare[\s\S]*/i, '')
+          .replace(/\nCandidates who clicked apply[\s\S]*/i, '')
+          .trim().slice(0, 6000);
+      }
+    }
+  }
+
+  // 2. JSON-LD structured data
+  if (!info.title) {
+    const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+    for (const s of jsonLdScripts) {
+      try {
+        const data = JSON.parse(s.textContent);
+        const job = data['@type'] === 'JobPosting' ? data
+          : Array.isArray(data['@graph']) ? data['@graph'].find(x => x['@type'] === 'JobPosting')
+          : null;
+        if (job) {
+          info.title       = info.title       || job.title || '';
+          info.company     = info.company     || job.hiringOrganization?.name || '';
+          info.location    = info.location    || job.jobLocation?.address?.addressLocality || '';
+          info.description = info.description || stripHtml(job.description || '');
+        }
+      } catch { /* skip malformed */ }
+    }
+  }
+
+  // 3. OpenGraph / meta tags
+  if (!info.title)   info.title   = meta('og:title')    || meta('twitter:title') || '';
+  if (!info.company) info.company = meta('og:site_name') || '';
+
+  // 4. Page title heuristic: "Role @ Company" or "Role | Company"
+  if (!info.title || !info.company) {
+    const pageTitle = document.title;
+    const sep = pageTitle.match(/(.+?)\s*[@|--]\s*(.+)/);
+    if (sep) {
+      if (!info.title)   info.title   = sep[1].trim();
+      if (!info.company) info.company = sep[2].replace(/\s*jobs?$/i, '').trim();
+    } else if (!info.title) {
+      info.title = pageTitle.trim();
+    }
+  }
+
+  // 5. Description fallback
+  if (!info.description) info.description = findDescBlock();
+
+  return info;
+}
+
 // -- Sub-components ------------------------------------------------------------
 
 function CompanionBanner({ health }) {
@@ -154,24 +284,24 @@ function GenerateTab({ settings, resumeLoaded }) {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab?.id) throw new Error('No active tab found.');
-      const j = await chrome.tabs.sendMessage(tab.id, { type: 'GET_JOB_INFO' });
-      if (j?.error) throw new Error(j.error);
+      // executeScript injects fresh code on every click - no stale content script connection
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: scrapeJobFromPage,
+      });
+      const j = results[0]?.result;
       if (!j?.title && !j?.company) {
         setScanError('No job info detected - make sure you are on a job posting page.');
         setScanState('idle');
         return;
       }
-      setTitle(j.title   || '');
-      setCompany(j.company || '');
-      setDesc(j.description || '');
-      setAts(j.ats || 'generic');
+      setTitle(j.title       || '');
+      setCompany(j.company   || '');
+      setDesc(j.description  || '');
+      setAts(j.ats           || 'generic');
       setScanState('found');
     } catch (err) {
-      setScanError(
-        err.message?.includes('Receiving end does not exist')
-          ? 'Page not ready - try refreshing the job page first.'
-          : err.message
-      );
+      setScanError(err.message || 'Scan failed.');
       setScanState('idle');
     }
   }, []);

@@ -124,13 +124,13 @@
     const stored = await chrome.storage.local.get(['user_profile']);
     const profile = stored.user_profile || {};
 
-    // Load the appropriate ATS handler dynamically
-    const handlerUrl = chrome.runtime.getURL(`content_scripts/ats/${ats}.js`);
-    try {
-      const mod = await import(handlerUrl);
-      mod.fill(profile, coverLetter);
-    } catch {
-      // Fall back to generic filler
+    // ATS handlers are pre-injected via manifest content_scripts (no import needed).
+    // window.__overhiredATS is populated by common.js + each handler file.
+    const handlers = window.__overhiredATS || {};
+    const fill = handlers[ats] || handlers.generic;
+    if (fill) {
+      await fill(profile, coverLetter);
+    } else {
       _genericFill(profile, coverLetter);
     }
   }

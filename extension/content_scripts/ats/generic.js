@@ -1,28 +1,47 @@
 /**
- * Generic ATS handler — fallback when no specific handler matches.
+ * overhired — Generic ATS handler fallback
+ *
+ * Used when no specific ATS handler matches the current URL.
  * Attempts a best-effort fill using common field patterns.
+ *
+ * Classic content script — registers handler on window.__overhiredATS.generic
  */
-import { setValue, waitFor, fillCoverLetterTextarea } from './common.js';
+(function () {
+  'use strict';
 
-export async function fill(profile, coverLetter) {
-  console.log('[overhired] No specific ATS handler found — using generic filler');
+  const { setValue, fillCoverLetterTextarea } = window.__overhiredCommon;
 
-  // Common first/last name patterns
-  const firstNameSel = 'input[name*="first"], input[id*="first"], input[placeholder*="First"]';
-  const lastNameSel  = 'input[name*="last"],  input[id*="last"],  input[placeholder*="Last"]';
-  const emailSel     = 'input[type="email"], input[name*="email"], input[id*="email"]';
-  const phoneSel     = 'input[type="tel"],   input[name*="phone"], input[id*="phone"]';
+  async function fill(profile, coverLetter) {
+    console.log('[overhired] No specific ATS handler — using generic filler');
 
-  const tryFill = (sel, value) => {
-    if (!value) return;
-    const el = document.querySelector(sel);
-    if (el) setValue(el, value);
-  };
+    const map = [
+      [/first.?name|fname/i,       profile.name?.split(' ')[0] || profile.first_name || ''],
+      [/last.?name|lname/i,        profile.name?.split(' ').slice(1).join(' ') || profile.last_name || ''],
+      [/full.?name|^name$/i,       profile.name || ''],
+      [/email/i,                   profile.email || ''],
+      [/phone|mobile|telephone/i,  profile.phone || ''],
+      [/linkedin/i,                profile.linkedin || ''],
+      [/github/i,                  profile.github   || ''],
+      [/address|street/i,          profile.address_street  || ''],
+      [/city/i,                    profile.address_city    || ''],
+      [/state|province|region/i,   profile.address_state   || ''],
+      [/zip|postal/i,              profile.address_postal  || ''],
+      [/country/i,                 profile.address_country || ''],
+    ];
 
-  tryFill(firstNameSel, profile.firstName);
-  tryFill(lastNameSel,  profile.lastName);
-  tryFill(emailSel,     profile.email);
-  tryFill(phoneSel,     profile.phone);
+    const inputs = document.querySelectorAll('input[type="text"], input[type="email"], input[type="tel"]');
+    for (const input of inputs) {
+      const attr = (input.name + ' ' + input.id + ' ' + (input.placeholder || '')).toLowerCase();
+      for (const [pattern, value] of map) {
+        if (value && pattern.test(attr)) {
+          setValue(input, value);
+          break;
+        }
+      }
+    }
 
-  await fillCoverLetterTextarea(document, coverLetter);
-}
+    if (coverLetter) fillCoverLetterTextarea(coverLetter);
+  }
+
+  window.__overhiredATS.generic = fill;
+})();

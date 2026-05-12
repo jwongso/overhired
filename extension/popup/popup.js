@@ -647,7 +647,13 @@ function App() {
 
   useEffect(() => {
     load([STORAGE_KEYS.settings, STORAGE_KEYS.resume]).then(d => {
-      const s = d.settings ? { ...DEFAULT_SETTINGS, ...d.settings } : DEFAULT_SETTINGS;
+      let s = d.settings ? { ...DEFAULT_SETTINGS, ...d.settings } : DEFAULT_SETTINGS;
+      // Migrate: old installs had hardcoded ollama/llama3.2 defaults; clear them so
+      // the companion uses its own config.toml instead of being overridden.
+      if (s.provider === 'ollama' && s.model === 'llama3.2') {
+        s = { ...s, provider: '', endpoint: '', model: '' };
+        store({ [STORAGE_KEYS.settings]: s });
+      }
       setSettings(s);
       if (d.resume_text) setResumeLoaded(true);
       companionHealth(s.companion_url).then(setHealth);

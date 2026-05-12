@@ -99,9 +99,14 @@ async function companionHealth(url = 'http://localhost:7878') {
 function CompanionBanner({ health }) {
   if (health === undefined) return null; // still checking
   if (health) {
+    const isLocal = health.ai_endpoint?.includes('localhost') || health.ai_endpoint?.includes('127.0.0.1');
+    const providerLabel = health.ai_provider === 'claude' ? 'Claude'
+      : health.ai_provider === 'ollama' ? 'Ollama'
+      : isLocal ? 'local LLM'
+      : 'OpenAI';
     const ai = health.ai_reachable
-      ? `${health.ai_provider} · ${health.ai_model}`
-      : `${health.ai_provider} · ⚠ not reachable`;
+      ? providerLabel
+      : `${providerLabel} · ⚠ not reachable`;
     return html`<div class="banner ok">✓ Companion running · ${ai}</div>`;
   }
   const cmd = 'cd companion && python main.py';

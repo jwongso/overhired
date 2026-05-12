@@ -402,7 +402,7 @@ function GenerateTab({ settings, resumeLoaded }) {
       ${scanError && html`
         <p style="color:var(--muted);font-size:11px;margin-top:0">${scanError}</p>`}
       ${isListView && html`
-        <p style="color:var(--muted);font-size:11px;margin-top:4px">
+        <p style="background:#3a300a;color:#f5c842;font-size:11px;margin-top:4px;padding:6px 8px;border-radius:6px;border-left:3px solid #f5c842">
           You are on a search/list page. Open the specific job in its own tab for reliable scanning.
         </p>`}
       ${!resumeLoaded && html`

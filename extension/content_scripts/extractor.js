@@ -81,59 +81,43 @@
       }
     }
 
-    // 4. LinkedIn: collection pages put the wrong info in meta/title.
-    //    Read title, company, location, and description from the job detail panel.
+    // 4. LinkedIn: collection pages have wrong og:title / og:site_name.
+    //    Use structural DOM traversal and stable href patterns instead of class names.
     if (/linkedin\.com\/jobs/i.test(window.location.href)) {
-      const pick = (selectors) => {
-        for (const sel of selectors) {
-          const el = document.querySelector(sel);
-          const t  = el?.innerText?.trim();
-          if (t) return t;
-        }
-        return '';
-      };
-
-      const liTitle = pick([
-        'h1.job-details-jobs-unified-top-card__job-title',
-        'h2.jobs-details-top-card__job-title',
-        '.jobs-unified-top-card h1',
-        '.jobs-unified-top-card h2',
-        'h1[class*="job-title"]',
-        'h2[class*="job-title"]',
-      ]);
-      const liCompany = pick([
-        '.job-details-jobs-unified-top-card__company-name a',
-        '.jobs-unified-top-card__company-name a',
-        'a[class*="company-name"]',
-        '.job-details-jobs-unified-top-card__primary-description-container a',
-      ]);
-      const liLocation = pick([
-        '.job-details-jobs-unified-top-card__bullet',
-        '.jobs-unified-top-card__bullet',
-        '.job-details-jobs-unified-top-card__primary-description-container span',
-      ]);
-      const liDesc = pick([
-        '#job-details',
-        '.jobs-description-content__text',
-        '.jobs-description__content',
-        'div[class*="jobs-description__content"]',
-        'div[class*="jobs-description-content"]',
-      ]);
-
-      if (liTitle)    info.title    = liTitle;
-      if (liCompany)  info.company  = liCompany;
-      if (liLocation) info.location = liLocation;
-      if (liDesc)     info.description = liDesc;
-
-      // Strip LinkedIn UI noise appended after the actual job content
-      if (info.description) {
-        info.description = info.description
+      // Description: #job-details is stable; strip LinkedIn UI noise below it
+      const descEl = document.querySelector(
+        '#job-details, .jobs-description-content__text, .jobs-description__content'
+      );
+      if (descEl) {
+        info.description = descEl.innerText.trim()
           .replace(/\nSee how you compare[\s\S]*/i, '')
           .replace(/\nCandidates who clicked apply[\s\S]*/i, '')
           .replace(/\nExclusive Job Seeker Insights[\s\S]*/i, '')
           .replace(/\nPowered by Bing[\s\S]*/i, '')
           .trim()
           .slice(0, 6000);
+      }
+
+      // Company: LinkedIn company page links always contain /company/ in href
+      const companyLink = document.querySelector('a[href*="linkedin.com/company/"], a[href*="/company/"]');
+      if (companyLink?.innerText?.trim()) info.company = companyLink.innerText.trim();
+
+      // Title: walk up from the description container, find an h1/h2 that is NOT
+      // the collection-page heading ("Jobs where you're a top applicant", etc.)
+      if (!info.title || /jobs where|top applicant|easy apply/i.test(info.title)) {
+        const anchor = descEl || document.querySelector('main, [role="main"]');
+        let el = anchor?.parentElement;
+        outer: for (let depth = 0; depth < 10 && el; depth++, el = el.parentElement) {
+          for (const h of el.querySelectorAll('h1, h2')) {
+            if (anchor?.contains(h)) continue; // skip headings inside description
+            const text = h.innerText.trim();
+            if (text.length > 4 && text.length < 150 &&
+                !/jobs where|top applicant|easy apply|search results/i.test(text)) {
+              info.title = text;
+              break outer;
+            }
+          }
+        }
       }
     }
 

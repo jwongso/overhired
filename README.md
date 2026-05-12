@@ -115,14 +115,15 @@ Browser Extension
 
 | Platform | Auto-fill | Notes |
 |----------|-----------|-------|
-| **Greenhouse** | ✅ v1.0 | Cleanest DOM; most reliable |
-| **Ashby** | ✅ v1.0 | React SPA; uses MutationObserver |
-| **Workable** | ✅ v1.0 | Multi-step form; name + email + cover letter |
-| **iCIMS** | ✅ v1.1 | Classic + modern layouts; cross-origin iframe portals unsupported |
-| **SAP SuccessFactors** | ✅ v1.1 | Angular SPA; `data-automation-id` + label-based |
-| SmartRecruiters | planned v1.2 | |
-| Lever | planned v1.2 | |
-| LinkedIn Easy Apply | planned v1.2 | |
+| **Greenhouse** | ✅ | Cleanest DOM; most reliable |
+| **Ashby** | ✅ | React SPA; label + aria-label matching |
+| **Workable** | ✅ | Multi-step; name + email + cover letter |
+| **Workday** | ✅ | `data-automation-id`; fills current step (multi-step wizard) |
+| **Lever** | ✅ | React; name attrs + LinkedIn/GitHub URL fields |
+| **SmartRecruiters** | ✅ | Angular; `data-qa` + name + label fallback |
+| **iCIMS** | ✅ | Classic (`applicant.*`) + modern (aria-label) dual strategy |
+| **SAP SuccessFactors** | ✅ | Angular; `data-automation-id` + label fallback |
+| LinkedIn Easy Apply | planned | |
 
 ---
 

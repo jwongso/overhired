@@ -19,8 +19,9 @@
     { name: 'greenhouse',      pattern: /greenhouse\.io|boards\.greenhouse/i },
     { name: 'ashby',           pattern: /ashbyhq\.com/i },
     { name: 'workable',        pattern: /workable\.com/i },
+    { name: 'workday',         pattern: /myworkdayjobs\.com/i },
+    { name: 'lever',           pattern: /jobs\.lever\.co/i },
     { name: 'smartrecruiters', pattern: /smartrecruiters\.com/i },
-    { name: 'lever',           pattern: /lever\.co/i },
     { name: 'icims',           pattern: /icims\.com/i },
     { name: 'successfactors',  pattern: /successfactors\.com|successfactors\.eu|sapsf\.com/i },
   ];

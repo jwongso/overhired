@@ -81,7 +81,63 @@
       }
     }
 
-    // 4. Heuristic DOM: find the largest text block likely to be the JD
+    // 4. LinkedIn: collection pages put the wrong info in meta/title.
+    //    Read title, company, location, and description from the job detail panel.
+    if (/linkedin\.com\/jobs/i.test(window.location.href)) {
+      const pick = (selectors) => {
+        for (const sel of selectors) {
+          const el = document.querySelector(sel);
+          const t  = el?.innerText?.trim();
+          if (t) return t;
+        }
+        return '';
+      };
+
+      const liTitle = pick([
+        'h1.job-details-jobs-unified-top-card__job-title',
+        'h2.jobs-details-top-card__job-title',
+        '.jobs-unified-top-card h1',
+        '.jobs-unified-top-card h2',
+        'h1[class*="job-title"]',
+        'h2[class*="job-title"]',
+      ]);
+      const liCompany = pick([
+        '.job-details-jobs-unified-top-card__company-name a',
+        '.jobs-unified-top-card__company-name a',
+        'a[class*="company-name"]',
+        '.job-details-jobs-unified-top-card__primary-description-container a',
+      ]);
+      const liLocation = pick([
+        '.job-details-jobs-unified-top-card__bullet',
+        '.jobs-unified-top-card__bullet',
+        '.job-details-jobs-unified-top-card__primary-description-container span',
+      ]);
+      const liDesc = pick([
+        '#job-details',
+        '.jobs-description-content__text',
+        '.jobs-description__content',
+        'div[class*="jobs-description__content"]',
+        'div[class*="jobs-description-content"]',
+      ]);
+
+      if (liTitle)    info.title    = liTitle;
+      if (liCompany)  info.company  = liCompany;
+      if (liLocation) info.location = liLocation;
+      if (liDesc)     info.description = liDesc;
+
+      // Strip LinkedIn UI noise appended after the actual job content
+      if (info.description) {
+        info.description = info.description
+          .replace(/\nSee how you compare[\s\S]*/i, '')
+          .replace(/\nCandidates who clicked apply[\s\S]*/i, '')
+          .replace(/\nExclusive Job Seeker Insights[\s\S]*/i, '')
+          .replace(/\nPowered by Bing[\s\S]*/i, '')
+          .trim()
+          .slice(0, 6000);
+      }
+    }
+
+    // 5. Heuristic DOM: find the largest text block likely to be the JD
     if (!info.description) {
       info.description = _findJobDescriptionBlock();
     }

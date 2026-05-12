@@ -16,12 +16,13 @@ const IN_FULL_TAB = SEARCH.has('tab');
 const AUSPICE_URL = 'https://fengshui.overhired.work';
 
 async function fetchAuspice() {
-  const today = new Date().toISOString().slice(0, 10);
-  const to    = new Date(Date.now() + 6 * 86400000).toISOString().slice(0, 10);
+  const tomorrow = new Date(Date.now() + 86400000);
+  const twoWeeks = new Date(Date.now() + 15 * 86400000);
+  const fmt = d => d.toISOString().slice(0, 10);
   try {
     const [dayRes, bestRes] = await Promise.all([
       fetch(`${AUSPICE_URL}/today`).then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch(`${AUSPICE_URL}/best?activity=interview&from=${today}&to=${to}`)
+      fetch(`${AUSPICE_URL}/best?activity=interview&from=${fmt(tomorrow)}&to=${fmt(twoWeeks)}`)
         .then(r => r.ok ? r.json() : null).catch(() => null),
     ]);
     return { day: dayRes, best: bestRes };
@@ -39,10 +40,18 @@ function FengShuiPanel() {
   const TYPE_COLOR = { lucky: '#4caf7d', ordinary: '#f59e0b', unlucky: '#e05252' };
   const TYPE_LABEL = { lucky: 'Lucky Day', ordinary: 'Ordinary Day', unlucky: 'Unlucky Day' };
   const color    = TYPE_COLOR[day.type];
-  const bestDays = (best?.days || []).slice(0, 3).map(d => {
-    const dt = new Date(d.date + 'T00:00:00');
-    return dt.toLocaleDateString('en', { weekday: 'short', month: 'short', day: 'numeric' });
-  });
+  const bestDays = (best?.days || [])
+    .filter(d => {
+      const [y, m, day] = d.date.split('-').map(Number);
+      const dow = new Date(y, m - 1, day).getDay();
+      return dow !== 0 && dow !== 6; // exclude Sunday and Saturday
+    })
+    .slice(0, 3)
+    .map(d => {
+      const [y, m, day] = d.date.split('-').map(Number);
+      return new Date(y, m - 1, day)
+        .toLocaleDateString('en', { weekday: 'short', month: 'short', day: 'numeric' });
+    });
 
   return html`
     <div class="fengshui-panel">

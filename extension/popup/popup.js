@@ -83,10 +83,10 @@ const DEFAULT_SETTINGS = {
   easter_egg:          false,
   easter_egg_text:     '',        // empty = use companion's built-in default
   companion_url:       'http://localhost:7878',
-  companion_token:     '',        // copy from companion config.toml → auth_token
+  companion_token:     '',        // copy from companion config.toml -> auth_token
 };
 
-// ── Utility ───────────────────────────────────────────────────────────────────
+// -- Utility -------------------------------------------------------------------
 
 const load  = (keys) => chrome.storage.local.get(keys);
 const store = (obj)  => chrome.storage.local.set(obj);
@@ -99,7 +99,7 @@ async function companionHealth(url = 'http://localhost:7878') {
   } catch { return null; }
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+// -- Sub-components ------------------------------------------------------------
 
 function CompanionBanner({ health }) {
   if (health === undefined) return null; // still checking
@@ -110,17 +110,17 @@ function CompanionBanner({ health }) {
       : isLocal ? 'local LLM'
       : 'OpenAI';
     const modelName  = (health.ai_model || '').replace(/\.gguf$/i, '').replace(/^local$/, '');
-    const modelLabel = modelName ? ` · ${modelName}` : '';
+    const modelLabel = modelName ? ` - ${modelName}` : '';
     const ai = health.ai_reachable
       ? `${providerLabel}${modelLabel}`
-      : `${providerLabel} · ⚠ not reachable`;
-    return html`<div class="banner ok">✓ Companion running · ${ai}</div>`;
+      : `${providerLabel} - not reachable`;
+    return html`<div class="banner ok">Companion running - ${ai}</div>`;
   }
   const cmd = 'cd companion && python main.py';
   const copy = () => navigator.clipboard.writeText(cmd);
   return html`
     <div class="banner">
-      ⚠ Companion not running
+      Companion not running
       <button class="banner-cmd" onClick=${copy} title="Click to copy">
         python main.py
       </button>
@@ -132,11 +132,11 @@ function JobCard({ job }) {
   return html`
     <div class="job-card">
       <div class="job-title">${job.title || '(title not detected)'}</div>
-      <div class="job-meta">${job.company || ''} ${job.location ? '· ' + job.location : ''}</div>
+      <div class="job-meta">${job.company || ''} ${job.location ? ' - ' + job.location : ''}</div>
     </div>`;
 }
 
-// ── Generate tab ──────────────────────────────────────────────────────────────
+// -- Generate tab --------------------------------------------------------------
 
 function GenerateTab({ job, settings, resumeLoaded, scrapeError }) {
   const [perJob,     setPerJob]     = useState('');
@@ -204,7 +204,7 @@ function GenerateTab({ job, settings, resumeLoaded, scrapeError }) {
 
       ${scrapeError && !job && html`
         <p style="color:var(--muted);font-size:11px;margin-top:0;padding-top:0">
-          ⚠ Could not extract job info: ${scrapeError}
+          Could not extract job info: ${scrapeError}
         </p>`}
 
       <div class="field">
@@ -224,18 +224,18 @@ function GenerateTab({ job, settings, resumeLoaded, scrapeError }) {
           onClick=${generate}
         >
           ${status === 'loading'
-            ? html`<span class="spinner"></span> Generating…`
-            : '✦ Extract & Generate'}
+            ? html`<span class="spinner"></span> Generating...`
+            : 'Extract & Generate'}
         </button>
         ${result && html`
           <button class="btn btn-secondary" onClick=${fillForm} title="Fill ATS form">
-            ⬇ Fill Form
+            Fill Form
           </button>`}
       </div>
 
       ${!resumeLoaded && html`
         <p style="color:var(--muted);font-size:11px;margin-top:8px">
-          ⚠ No resume loaded - go to Settings to upload your PDF.
+          No resume loaded - go to Settings to upload your PDF.
         </p>`}
 
       ${status === 'error' && html`
@@ -243,7 +243,7 @@ function GenerateTab({ job, settings, resumeLoaded, scrapeError }) {
 
       ${savedPaths && html`
         <div class="saved-path">
-          ✓ Saved: ${savedPaths.md_path}
+          Saved: ${savedPaths.md_path}
         </div>`}
 
       ${result && html`
@@ -253,7 +253,7 @@ function GenerateTab({ job, settings, resumeLoaded, scrapeError }) {
     </div>`;
 }
 
-// ── Settings tab ──────────────────────────────────────────────────────────────
+// -- Settings tab --------------------------------------------------------------
 
 function SettingsTab({ settings, onSave, onResumeLoaded }) {
   const [s,       setS]       = useState(settings);
@@ -323,11 +323,11 @@ function SettingsTab({ settings, onSave, onResumeLoaded }) {
             ? document.getElementById('pdf-input').click()
             : openUploadTab()}
         >
-          ${rStatus === 'loaded'  ? (IN_FULL_TAB ? '✓ Resume loaded - click to replace' : '✓ Resume loaded - click to update') :
-            rStatus === 'loading' ? '⏳ Parsing PDF…' :
-            rStatus.startsWith('error') ? `⚠ ${rStatus}` :
-            IN_FULL_TAB ? '📄 Drop your resume PDF here or click to select'
-                        : '📄 Click to open upload page'}
+          ${rStatus === 'loaded'  ? (IN_FULL_TAB ? 'Resume loaded - click to replace' : 'Resume loaded - click to update') :
+            rStatus === 'loading' ? 'Parsing PDF...' :
+            rStatus.startsWith('error') ? `${rStatus}` :
+            IN_FULL_TAB ? 'Drop your resume PDF here or click to select'
+                        : 'Click to open upload page'}
         </div>
         <input id="pdf-input" type="file" accept=".pdf" style="display:none"
           onChange=${e => handlePdf(e.target.files[0])} />
@@ -379,7 +379,7 @@ function SettingsTab({ settings, onSave, onResumeLoaded }) {
         ${s.provider !== 'ollama' && html`
           <div class="field">
             <label>API Key</label>
-            <input type="password" ...${field('api_key')} placeholder="sk-…" />
+            <input type="password" ...${field('api_key')} placeholder="sk-..." />
           </div>`}
       </div>
 
@@ -409,7 +409,7 @@ function SettingsTab({ settings, onSave, onResumeLoaded }) {
 
       <!-- Easter egg -->
       <div class="settings-section">
-        <div class="settings-title">🤖 Easter Egg</div>
+        <div class="settings-title">Easter Egg</div>
         <div class="toggle-row">
           <span class="toggle-label">Include AI prompt injection comment</span>
           <input type="checkbox"
@@ -418,23 +418,23 @@ function SettingsTab({ settings, onSave, onResumeLoaded }) {
         </div>
         <p style="font-size:11px;color:var(--muted)">
           Appends a hidden HTML comment to every cover letter instructing AI
-          screening systems to advance your application. 😄
+          screening systems to advance your application. 
         </p>
         ${s.easter_egg && html`
           <div class="field" style="margin-top:8px">
             <label>Custom message <span style="color:var(--muted)">(leave empty for built-in default)</span></label>
             <textarea rows=4 ...${field('easter_egg_text')}
-              placeholder="Custom AI prompt injection text…" />
+              placeholder="Custom AI prompt injection text..." />
           </div>`}
       </div>
 
       <button class="btn btn-primary btn-full" onClick=${saveAll}>
-        ${saved ? '✓ Saved!' : 'Save Settings'}
+        ${saved ? 'Saved!' : 'Save Settings'}
       </button>
     </div>`;
 }
 
-// ── Root App ──────────────────────────────────────────────────────────────────
+// -- Root App ------------------------------------------------------------------
 
 function App() {
   const [tab,         setTab]         = useState(IN_FULL_TAB ? 'settings' : 'generate');
@@ -470,7 +470,7 @@ function App() {
       <div class="header">
         <div class="logo">over<span>hired</span></div>
         <span class="pill ${health ? 'pill-ok' : health === undefined ? 'pill-loading' : 'pill-err'}">
-          ${health ? 'online' : health === undefined ? '…' : 'offline'}
+          ${health ? 'online' : health === undefined ? '...' : 'offline'}
         </span>
       </div>
 
@@ -492,7 +492,7 @@ function App() {
     </div>`;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// -- Helpers -------------------------------------------------------------------
 
 async function parsePdfLocally(file) {
   const wasmUrl = chrome.runtime.getURL('wasm/mupdf.js');
@@ -515,6 +515,6 @@ async function parsePdfLocally(file) {
   return text;
 }
 
-// ── Mount ─────────────────────────────────────────────────────────────────────
+// -- Mount ---------------------------------------------------------------------
 
 render(html`<${App} />`, document.getElementById('app'));

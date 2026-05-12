@@ -8,6 +8,62 @@ import htm                 from '../vendor/htm.module.js';
 
 const html = htm.bind(h);
 
+const AUSPICE_URL = 'https://fengshui.overhired.work';
+
+async function fetchAuspice() {
+  const today = new Date().toISOString().slice(0, 10);
+  const to    = new Date(Date.now() + 6 * 86400000).toISOString().slice(0, 10);
+  try {
+    const [dayRes, bestRes] = await Promise.all([
+      fetch(`${AUSPICE_URL}/today`).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${AUSPICE_URL}/best?activity=interview&from=${today}&to=${to}`)
+        .then(r => r.ok ? r.json() : null).catch(() => null),
+    ]);
+    return { day: dayRes, best: bestRes };
+  } catch { return null; }
+}
+
+function FengShuiPanel() {
+  const [data, setData] = useState(null);
+
+  useEffect(() => { fetchAuspice().then(setData); }, []);
+
+  if (!data?.day) return null;
+
+  const { day, best } = data;
+  const TYPE_COLOR = { lucky: '#4caf7d', ordinary: '#f59e0b', unlucky: '#e05252' };
+  const TYPE_LABEL = { lucky: 'Lucky Day', ordinary: 'Ordinary Day', unlucky: 'Unlucky Day' };
+  const color    = TYPE_COLOR[day.type];
+  const bestDays = (best?.days || []).slice(0, 3).map(d => {
+    const dt = new Date(d.date + 'T00:00:00');
+    return dt.toLocaleDateString('en', { weekday: 'short', month: 'short', day: 'numeric' });
+  });
+
+  return html`
+    <div class="fengshui-panel">
+      <div class="fengshui-header">
+        <span class="fengshui-dot" style="background:${color}"></span>
+        <span class="fengshui-type" style="color:${color}">${TYPE_LABEL[day.type]}</span>
+        <span class="fengshui-badge">fengshui</span>
+      </div>
+      ${day.type !== 'unlucky' && day.favourable.length > 0 && html`
+        <div class="fengshui-row">
+          <span class="fengshui-key">Good:</span>
+          <span>${day.favourable.slice(0, 4).join(', ')}</span>
+        </div>`}
+      ${day.type !== 'unlucky' && day.unfavourable.length > 0 && html`
+        <div class="fengshui-row">
+          <span class="fengshui-key">Avoid:</span>
+          <span>${day.unfavourable.slice(0, 3).join(', ')}</span>
+        </div>`}
+      ${bestDays.length > 0 && html`
+        <div class="fengshui-row">
+          <span class="fengshui-key">Best interview days:</span>
+          <span>${bestDays.join(', ')}</span>
+        </div>`}
+    </div>`;
+}
+
 const STORAGE_KEYS = {
   resume:    'resume_text',
   profile:   'user_profile',
@@ -132,6 +188,7 @@ function GenerateTab({ job, settings, resumeLoaded, scrapeError }) {
   return html`
     <div class="panel">
       <${JobCard} job=${job} />
+      <${FengShuiPanel} />
 
       ${scrapeError && !job && html`
         <p style="color:var(--muted);font-size:11px;margin-top:0;padding-top:0">

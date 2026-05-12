@@ -131,7 +131,7 @@ class AIClient:
             "model": self.model,
             "system": system,
             "messages": [{"role": "user", "content": user}],
-            "max_tokens": 1024,
+            "max_tokens": 2048,
         }
         headers = {
             "Content-Type":      "application/json",

@@ -82,41 +82,38 @@
     }
 
     // 4. LinkedIn: collection pages have wrong og:title / og:site_name.
-    //    Use structural DOM traversal and stable href patterns instead of class names.
+    //    LinkedIn embeds full job data as JSON in hidden <code id="bpr-guid-*"> elements.
+    //    Parse that directly - it contains title, company name, location, and description text.
     if (/linkedin\.com\/jobs/i.test(window.location.href)) {
-      // Description: #job-details is stable; strip LinkedIn UI noise below it
-      const descEl = document.querySelector(
-        '#job-details, .jobs-description-content__text, .jobs-description__content'
-      );
-      if (descEl) {
-        info.description = descEl.innerText.trim()
-          .replace(/\nSee how you compare[\s\S]*/i, '')
-          .replace(/\nCandidates who clicked apply[\s\S]*/i, '')
-          .replace(/\nExclusive Job Seeker Insights[\s\S]*/i, '')
-          .replace(/\nPowered by Bing[\s\S]*/i, '')
-          .trim()
-          .slice(0, 6000);
-      }
-
-      // Company: LinkedIn company page links always contain /company/ in href
-      const companyLink = document.querySelector('a[href*="linkedin.com/company/"], a[href*="/company/"]');
-      if (companyLink?.innerText?.trim()) info.company = companyLink.innerText.trim();
-
-      // Title: walk up from the description container, find an h1/h2 that is NOT
-      // the collection-page heading ("Jobs where you're a top applicant", etc.)
-      if (!info.title || /jobs where|top applicant|easy apply/i.test(info.title)) {
-        const anchor = descEl || document.querySelector('main, [role="main"]');
-        let el = anchor?.parentElement;
-        outer: for (let depth = 0; depth < 10 && el; depth++, el = el.parentElement) {
-          for (const h of el.querySelectorAll('h1, h2')) {
-            if (anchor?.contains(h)) continue; // skip headings inside description
-            const text = h.innerText.trim();
-            if (text.length > 4 && text.length < 150 &&
-                !/jobs where|top applicant|easy apply|search results/i.test(text)) {
-              info.title = text;
-              break outer;
+      const codeEls = document.querySelectorAll('code[id^="bpr-guid-"]');
+      for (const el of codeEls) {
+        try {
+          const parsed = JSON.parse(el.textContent);
+          for (const item of (parsed.included || [])) {
+            if (!info.title && item.$type?.includes('jobs.JobPosting') && item.title) {
+              info.title = item.title;
+              if (item.companyDetails?.name) info.company = item.companyDetails.name;
+              if (item.description?.text)    info.description = item.description.text.slice(0, 6000);
+            }
+            if (!info.location && item.$type?.includes('.Geo') && item.defaultLocalizedName) {
+              info.location = item.defaultLocalizedName;
+            }
+            if (!info.company && item.$type?.includes('organization.Company') && item.name) {
+              info.company = item.name;
             }
           }
+          if (info.title) break;
+        } catch { /* skip malformed */ }
+      }
+
+      // DOM fallback for description if JSON extraction missed it
+      if (!info.description) {
+        const descEl = document.querySelector('#job-details, .jobs-description-content__text');
+        if (descEl) {
+          info.description = descEl.innerText.trim()
+            .replace(/\nSee how you compare[\s\S]*/i, '')
+            .replace(/\nCandidates who clicked apply[\s\S]*/i, '')
+            .trim().slice(0, 6000);
         }
       }
     }

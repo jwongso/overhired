@@ -216,7 +216,7 @@ function scrapeJobFromPage() {
   // 4. Page title heuristic: "Role @ Company" or "Role | Company"
   if (!info.title || !info.company) {
     const pageTitle = document.title;
-    const sep = pageTitle.match(/(.+?)\s*[@|--]\s*(.+)/);
+    const sep = pageTitle.match(/(.+?)\s*[@|-]\s*(.+)/);
     if (sep) {
       if (!info.title)   info.title   = sep[1].trim();
       if (!info.company) info.company = sep[2].replace(/\s*jobs?$/i, '').trim();

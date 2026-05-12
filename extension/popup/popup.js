@@ -300,7 +300,15 @@ function GenerateTab({ settings, resumeLoaded }) {
       });
       const j = results[0]?.result;
       if (!j?.title && !j?.company) {
-        setScanError('No job info detected - make sure you are on a job posting page.');
+        const url = tab.url || '';
+        const isListView =
+          /linkedin\.com\/jobs\/(collections|search)/i.test(url) ||
+          /seek\.co\.nz\/jobs[\/?]/i.test(url) ||
+          /indeed\.com\/jobs[\/?]/i.test(url);
+        setScanError(isListView
+          ? 'No job found - you are on a list/search page. Open the specific job in a new tab, then scan again.'
+          : 'No job info detected - make sure you are on a job posting page.'
+        );
         setScanState('idle');
         return;
       }
@@ -382,6 +390,10 @@ function GenerateTab({ settings, resumeLoaded }) {
       </button>
       ${scanError && html`
         <p style="color:var(--muted);font-size:11px;margin-top:0">${scanError}</p>`}
+      <p style="color:var(--muted);font-size:11px;margin-top:4px">
+        On sites with a job list + detail panel (LinkedIn, Seek, Indeed), open the
+        job in its own tab first for reliable scanning.
+      </p>
       ${!resumeLoaded && html`
         <p style="color:var(--muted);font-size:11px;margin-top:6px">
           No resume loaded - upload your PDF in Settings first.

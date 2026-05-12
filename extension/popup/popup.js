@@ -200,7 +200,19 @@ function scrapeJobFromPage() {
     }
   }
 
-  // 2. JSON-LD structured data
+  // 2. Seek: data-automation attributes are reliable and stable
+  if (!info.title && /seek\.co\.nz/i.test(window.location.href)) {
+    const titleEl    = document.querySelector('[data-automation="job-detail-title"]');
+    const companyEl  = document.querySelector('[data-automation="advertiser-name"]');
+    const descEl     = document.querySelector('[data-automation="jobAdDetails"]');
+    const locationEl = document.querySelector('[data-automation="job-detail-location"]');
+    if (titleEl)    info.title       = titleEl.innerText.trim();
+    if (companyEl)  info.company     = companyEl.innerText.trim().split('\n')[0].trim();
+    if (locationEl) info.location    = locationEl.innerText.trim();
+    if (descEl)     info.description = descEl.innerText.trim().slice(0, 6000);
+  }
+
+  // 3. JSON-LD structured data
   if (!info.title) {
     const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
     for (const s of jsonLdScripts) {
@@ -219,10 +231,10 @@ function scrapeJobFromPage() {
     }
   }
 
-  // 3. OpenGraph / meta tags (og:site_name is the job board name, not the company - skip it)
+  // 4. OpenGraph / meta tags (og:site_name is the job board name, not the company - skip it)
   if (!info.title) info.title = meta('og:title') || meta('twitter:title') || '';
 
-  // 4. Page title heuristic: "Role @ Company" or "Role | Company"
+  // 5. Page title heuristic: "Role @ Company" or "Role | Company"
   if (!info.title || !info.company) {
     const pageTitle = document.title;
     const sep = pageTitle.match(/(.+?)\s*[@|-]\s*(.+)/);
@@ -234,7 +246,7 @@ function scrapeJobFromPage() {
     }
   }
 
-  // 5. Description fallback
+  // 6. Description fallback
   if (!info.description) info.description = findDescBlock();
 
   return info;

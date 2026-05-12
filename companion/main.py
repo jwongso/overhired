@@ -140,8 +140,9 @@ def generate(req: GenerateRequest, _: None = Depends(_require_token)):
     except ai_module.AIError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
-    # Normalise — some models wrap output in markdown fences
+    # Normalise - some models wrap output in markdown fences
     cover_md = _unwrap_fences(raw)
+    cover_md = _clean_output(cover_md)
 
     # Append easter egg HTML comment if requested
     if req.easter_egg:
@@ -185,13 +186,17 @@ def _build_system_prompt() -> str:
         Guidelines:
         - Language: {language}
         - Target length: {max_words} words (be concise and impactful)
-        - Tone: confident, warm, genuine — never sycophantic
+        - Tone: confident, warm, genuine - never sycophantic
         - Start with a salutation (e.g. "Dear Hiring Team,")
-        - Highlight 2–3 specific skills or experiences from the resume that
+        - Highlight 2-3 specific skills or experiences from the resume that
           directly match the job requirements
         - End with a professional closing and the applicant's name
         - Do NOT include a date, subject line, or postal addresses
-        - Output ONLY the cover letter — no preamble, no commentary
+        - Output ONLY the cover letter - no preamble, no commentary
+        - Use ONLY plain ASCII characters. No em dashes, en dashes, smart
+          quotes, curly apostrophes, ellipsis characters, or any Unicode
+          punctuation. Use a plain hyphen (-) instead of any dash.
+        - Do NOT add trailing spaces after sentences or at the end of lines.
     """)
 
 
@@ -276,6 +281,27 @@ def _md_to_html(cover_md: str, company: str, role: str) -> str:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _clean_output(text: str) -> str:
+    """Strip trailing whitespace from every line and replace non-ASCII punctuation."""
+    # Common non-ASCII punctuation replacements
+    replacements = [
+        ('—', '-'),   # em dash
+        ('–', '-'),   # en dash
+        ('‒', '-'),   # figure dash
+        ('‘', "'"),   # left single quotation mark
+        ('’', "'"),   # right single quotation mark / apostrophe
+        ('“', '"'),   # left double quotation mark
+        ('”', '"'),   # right double quotation mark
+        ('…', '...'), # horizontal ellipsis
+        (' ', ' '),   # non-breaking space
+    ]
+    for src, dst in replacements:
+        text = text.replace(src, dst)
+    # Strip trailing whitespace from every line (catches "sentence.  " patterns)
+    lines = [line.rstrip() for line in text.splitlines()]
+    return '\n'.join(lines).strip()
+
 
 def _unwrap_fences(text: str) -> str:
     """Remove ```markdown … ``` wrappers that some models add."""

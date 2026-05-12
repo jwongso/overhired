@@ -8,6 +8,11 @@ import htm                 from '../vendor/htm.module.js';
 
 const html = htm.bind(h);
 
+// Detect whether we are running as a popup or as a full browser tab.
+// When opened via chrome.tabs.create the URL carries ?tab=settings.
+const SEARCH      = new URLSearchParams(window.location.search);
+const IN_FULL_TAB = SEARCH.has('tab');
+
 const AUSPICE_URL = 'https://fengshui.overhired.work';
 
 async function fetchAuspice() {
@@ -277,6 +282,10 @@ function SettingsTab({ settings, onSave, onResumeLoaded }) {
     onInput: e => setProfile(prev => ({ ...prev, [key]: e.target.value })),
   });
 
+  const openUploadTab = useCallback(() => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('popup/popup.html') + '?tab=settings' });
+  }, []);
+
   const handlePdf = useCallback(async (file) => {
     if (!file || !file.name.endsWith('.pdf')) return;
     setRStatus('loading');
@@ -311,12 +320,15 @@ function SettingsTab({ settings, onSave, onResumeLoaded }) {
           onDragOver=${e => { e.preventDefault(); setDrag(true); }}
           onDragLeave=${() => setDrag(false)}
           onDrop=${e => { e.preventDefault(); setDrag(false); handlePdf(e.dataTransfer.files[0]); }}
-          onClick=${() => document.getElementById('pdf-input').click()}
+          onClick=${() => IN_FULL_TAB
+            ? document.getElementById('pdf-input').click()
+            : openUploadTab()}
         >
-          ${rStatus === 'loaded'  ? '✓ Resume loaded — click to replace' :
+          ${rStatus === 'loaded'  ? (IN_FULL_TAB ? '✓ Resume loaded — click to replace' : '✓ Resume loaded — click to update') :
             rStatus === 'loading' ? '⏳ Parsing PDF…' :
             rStatus.startsWith('error') ? `⚠ ${rStatus}` :
-            '📄 Drop your resume PDF here or click to select'}
+            IN_FULL_TAB ? '📄 Drop your resume PDF here or click to select'
+                        : '📄 Click to open upload page'}
         </div>
         <input id="pdf-input" type="file" accept=".pdf" style="display:none"
           onChange=${e => handlePdf(e.target.files[0])} />
@@ -426,7 +438,7 @@ function SettingsTab({ settings, onSave, onResumeLoaded }) {
 // ── Root App ──────────────────────────────────────────────────────────────────
 
 function App() {
-  const [tab,         setTab]         = useState('generate');
+  const [tab,         setTab]         = useState(IN_FULL_TAB ? 'settings' : 'generate');
   const [health,      setHealth]      = useState(undefined);
   const [job,         setJob]         = useState(null);
   const [scrapeError, setScrapeError] = useState('');

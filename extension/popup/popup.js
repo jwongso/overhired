@@ -219,9 +219,8 @@ function scrapeJobFromPage() {
     }
   }
 
-  // 3. OpenGraph / meta tags
-  if (!info.title)   info.title   = meta('og:title')    || meta('twitter:title') || '';
-  if (!info.company) info.company = meta('og:site_name') || '';
+  // 3. OpenGraph / meta tags (og:site_name is the job board name, not the company - skip it)
+  if (!info.title) info.title = meta('og:title') || meta('twitter:title') || '';
 
   // 4. Page title heuristic: "Role @ Company" or "Role | Company"
   if (!info.title || !info.company) {

@@ -284,6 +284,17 @@ function GenerateTab({ settings, resumeLoaded }) {
   const [result,     setResult]     = useState(null);
   const [errMsg,     setErrMsg]     = useState('');
   const [savedPaths, setSavedPaths] = useState(null);
+  const [tabUrl,     setTabUrl]     = useState('');
+
+  useEffect(() => {
+    chrome.tabs.query({ active: true, currentWindow: true })
+      .then(([tab]) => setTabUrl(tab?.url || ''));
+  }, []);
+
+  const isListView =
+    /linkedin\.com\/jobs\/(collections|search)/i.test(tabUrl) ||
+    /seek\.co\.nz\/jobs[\/?]/i.test(tabUrl) ||
+    /indeed\.com\/jobs[\/?]/i.test(tabUrl);
 
   const canGenerate = resumeLoaded && status !== 'loading';
 
@@ -390,10 +401,10 @@ function GenerateTab({ settings, resumeLoaded }) {
       </button>
       ${scanError && html`
         <p style="color:var(--muted);font-size:11px;margin-top:0">${scanError}</p>`}
-      <p style="color:var(--muted);font-size:11px;margin-top:4px">
-        On sites with a job list + detail panel (LinkedIn, Seek, Indeed), open the
-        job in its own tab first for reliable scanning.
-      </p>
+      ${isListView && html`
+        <p style="color:var(--muted);font-size:11px;margin-top:4px">
+          You are on a search/list page. Open the specific job in its own tab for reliable scanning.
+        </p>`}
       ${!resumeLoaded && html`
         <p style="color:var(--muted);font-size:11px;margin-top:6px">
           No resume loaded - upload your PDF in Settings first.

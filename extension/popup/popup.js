@@ -1,5 +1,5 @@
 /**
- * overhired — popup UI (Preact + htm, no build step)
+ * overhired - popup UI (Preact + htm, no build step)
  */
 import { h, render }       from '../vendor/preact.module.js';
 import { useState, useEffect, useCallback } from '../vendor/preact-hooks.module.js';
@@ -162,7 +162,7 @@ function GenerateTab({ job, settings, resumeLoaded, scrapeError }) {
       if (resp.error) throw new Error(resp.error);
       setResult(resp);
       setStatus('done');
-      // Auto-save — non-fatal: a save failure must not erase the generated result
+      // Auto-save - non-fatal: a save failure must not erase the generated result
       sendMsg({
         type: 'SAVE',
         company: job.company,
@@ -191,7 +191,7 @@ function GenerateTab({ job, settings, resumeLoaded, scrapeError }) {
     } catch (err) {
       setErrMsg(
         err.message?.includes('Receiving end does not exist')
-          ? 'Content script not ready — refresh the job page and try again.'
+          ? 'Content script not ready - refresh the job page and try again.'
           : 'Fill form failed: ' + err.message
       );
     }
@@ -235,7 +235,7 @@ function GenerateTab({ job, settings, resumeLoaded, scrapeError }) {
 
       ${!resumeLoaded && html`
         <p style="color:var(--muted);font-size:11px;margin-top:8px">
-          ⚠ No resume loaded — go to Settings to upload your PDF.
+          ⚠ No resume loaded - go to Settings to upload your PDF.
         </p>`}
 
       ${status === 'error' && html`
@@ -323,7 +323,7 @@ function SettingsTab({ settings, onSave, onResumeLoaded }) {
             ? document.getElementById('pdf-input').click()
             : openUploadTab()}
         >
-          ${rStatus === 'loaded'  ? (IN_FULL_TAB ? '✓ Resume loaded — click to replace' : '✓ Resume loaded — click to update') :
+          ${rStatus === 'loaded'  ? (IN_FULL_TAB ? '✓ Resume loaded - click to replace' : '✓ Resume loaded - click to update') :
             rStatus === 'loading' ? '⏳ Parsing PDF…' :
             rStatus.startsWith('error') ? `⚠ ${rStatus}` :
             IN_FULL_TAB ? '📄 Drop your resume PDF here or click to select'

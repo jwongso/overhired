@@ -1,0 +1,75 @@
+/**
+ * overhired — Ashby ATS form filler
+ * Matches: jobs.ashbyhq.com
+ *
+ * Ashby is a React SPA. Form fields are rendered dynamically and may not
+ * exist yet when the script runs — we use MutationObserver via waitFor().
+ */
+
+import { setValue, waitFor, fillCoverLetterTextarea } from './common.js';
+
+export async function fill(profile, coverLetter) {
+  // Ashby renders label + input pairs; we match by the visible label text
+  // rather than by id (which is a generated UUID).
+  await waitFor(() => document.querySelector('input[data-testid], input[aria-label]'), 5000);
+
+  await fillByLabel('First Name',   profile.name?.split(' ')[0] || profile.first_name || '');
+  await fillByLabel('Last Name',    profile.name?.split(' ').slice(1).join(' ') || profile.last_name || '');
+  await fillByLabel('Email',        profile.email   || '');
+  await fillByLabel('Phone',        profile.phone   || '');
+  await fillByLabel('LinkedIn',     profile.linkedin || '');
+  await fillByLabel('GitHub',       profile.github   || '');
+  await fillByLabel('City',         profile.address_city    || '');
+  await fillByLabel('Country',      profile.address_country || '');
+
+  // Cover letter — Ashby renders it as a large textarea or rich-text area
+  if (coverLetter) {
+    // Try a labelled textarea first
+    const ta = await findTextareaByLabel('Cover Letter') || await findTextareaByLabel('Message');
+    if (ta) setValue(ta, coverLetter);
+    else fillCoverLetterTextarea(coverLetter);
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+async function fillByLabel(labelText, value) {
+  if (!value) return;
+  const input = await waitFor(() => _inputForLabel(labelText), 3000).catch(() => null);
+  if (input) setValue(input, value);
+}
+
+async function findTextareaByLabel(labelText) {
+  return waitFor(() => {
+    const labels = document.querySelectorAll('label');
+    for (const label of labels) {
+      if (label.textContent.trim().toLowerCase().includes(labelText.toLowerCase())) {
+        const forId = label.htmlFor;
+        if (forId) return document.getElementById(forId);
+        // Ashby sometimes wraps input inside label
+        return label.querySelector('textarea, input');
+      }
+    }
+    return null;
+  }, 3000).catch(() => null);
+}
+
+function _inputForLabel(labelText) {
+  // Strategy 1: <label> with matching text pointing to an <input>
+  const labels = document.querySelectorAll('label');
+  for (const label of labels) {
+    if (label.textContent.trim().toLowerCase().includes(labelText.toLowerCase())) {
+      const forId = label.htmlFor;
+      if (forId) {
+        const el = document.getElementById(forId);
+        if (el) return el;
+      }
+      const el = label.querySelector('input, select');
+      if (el) return el;
+    }
+  }
+  // Strategy 2: input with matching aria-label or placeholder
+  return document.querySelector(
+    `input[aria-label*="${labelText}" i], input[placeholder*="${labelText}" i]`
+  );
+}

@@ -1,0 +1,135 @@
+/**
+ * overhired — service worker (MV3 background)
+ *
+ * Handles messages from the popup:
+ *   GENERATE   → build prompt, call companion /generate
+ *   SAVE       → call companion /save
+ *   PARSE_PDF  → load MuPDF WASM, extract text from base64 PDF
+ */
+
+const COMPANION = 'http://localhost:7878';
+
+// ── Message router ────────────────────────────────────────────────────────────
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  switch (msg.type) {
+    case 'GENERATE':  handleGenerate(msg).then(sendResponse).catch(err => sendResponse({ error: err.message })); break;
+    case 'SAVE':      handleSave(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));     break;
+    case 'PARSE_PDF': handleParsePdf(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));break;
+    default: return false;
+  }
+  return true; // keep channel open for async response
+});
+
+// ── GENERATE ──────────────────────────────────────────────────────────────────
+
+async function handleGenerate(msg) {
+  const { job, perJobInstructions, settings } = msg;
+
+  // Load resume + profile from storage
+  const stored = await chrome.storage.local.get(['resume_text', 'user_profile']);
+  const resumeText  = stored.resume_text  || '';
+  const userProfile = stored.user_profile || {};
+
+  if (!resumeText) throw new Error('No resume found. Please upload your PDF in Settings.');
+
+  const body = {
+    job_title:            job?.title        || 'Unknown Role',
+    company:              job?.company      || 'Unknown Company',
+    job_description:      job?.description  || '',
+    resume_text:          resumeText,
+    user_profile:         userProfile,
+    global_instructions:  settings?.global_instructions || '',
+    per_job_instructions: perJobInstructions || '',
+    easter_egg:           settings?.easter_egg || false,
+  };
+
+  const resp = await fetch(`${COMPANION}/generate`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(body),
+  });
+
+  if (!resp.ok) {
+    const detail = await resp.json().catch(() => ({}));
+    throw new Error(detail.detail || `Companion returned ${resp.status}`);
+  }
+
+  return resp.json();
+}
+
+// ── SAVE ──────────────────────────────────────────────────────────────────────
+
+async function handleSave(msg) {
+  const { company, role, coverMd, coverHtml } = msg;
+  const resp = await fetch(`${COMPANION}/save`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({
+      company,
+      role,
+      cover_letter_md:   coverMd,
+      cover_letter_html: coverHtml,
+    }),
+  });
+  if (!resp.ok) {
+    const detail = await resp.json().catch(() => ({}));
+    throw new Error(detail.detail || `Save failed: ${resp.status}`);
+  }
+  return resp.json();
+}
+
+// ── PARSE_PDF (MuPDF WASM) ────────────────────────────────────────────────────
+
+let _mupdfReady = null;
+let _mupdf      = null;
+
+async function getMuPDF() {
+  if (_mupdf) return _mupdf;
+  if (_mupdfReady) return _mupdfReady;
+
+  _mupdfReady = (async () => {
+    try {
+      const wasmUrl = chrome.runtime.getURL('wasm/mupdf.js');
+      const mod = await import(wasmUrl);
+      _mupdf = await mod.default();
+      return _mupdf;
+    } catch (e) {
+      throw new Error(`MuPDF WASM failed to load: ${e.message}. ` +
+        'Run: cd extension/wasm && node setup.js');
+    }
+  })();
+
+  return _mupdfReady;
+}
+
+async function handleParsePdf(msg) {
+  const { fileData } = msg; // base64 string
+
+  // Decode base64 → Uint8Array
+  const binary = atob(fileData);
+  const bytes  = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+  const mupdf = await getMuPDF();
+
+  // Open document
+  const doc   = mupdf.Document.openDocument(bytes, 'application/pdf');
+  const pages = doc.countPages();
+  const parts = [];
+
+  for (let i = 0; i < pages; i++) {
+    const page = doc.loadPage(i);
+    try {
+      parts.push(page.toStructuredText('preserve-whitespace').asText());
+    } finally {
+      page.destroy();
+    }
+  }
+  doc.destroy();
+
+  const resumeText = parts.join('\n\n').trim();
+  if (!resumeText) throw new Error('Could not extract text from PDF (may be image-only).');
+
+  return { resumeText };
+}

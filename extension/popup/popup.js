@@ -75,15 +75,15 @@ const STORAGE_KEYS = {
   settings:  'settings',
 };
 const DEFAULT_SETTINGS = {
-  provider:            'ollama',
-  endpoint:            'http://localhost:11434',
-  model:               'llama3.2',
+  provider:            '',               // empty = use companion's config.toml
+  endpoint:            '',
+  model:               '',
   api_key:             '',
   global_instructions: '',
   easter_egg:          false,
-  easter_egg_text:     '',        // empty = use companion's built-in default
+  easter_egg_text:     '',
   companion_url:       'http://localhost:7878',
-  companion_token:     '',        // copy from companion config.toml -> auth_token
+  companion_token:     '',
 };
 
 // -- Utility -------------------------------------------------------------------
@@ -398,26 +398,27 @@ function SettingsTab({ settings, onSave, onResumeLoaded }) {
         <div class="field">
           <label>Provider</label>
           <select value=${s.provider} onChange=${e => setS(p => ({ ...p, provider: e.target.value }))}>
+            <option value="">Companion default (from config.toml)</option>
             <option value="ollama">Ollama / llama.cpp (local)</option>
-            <option value="openai">OpenAI</option>
+            <option value="openai">OpenAI-compatible</option>
             <option value="claude">Anthropic Claude</option>
           </select>
         </div>
         <div class="field">
-          <label>Endpoint</label>
+          <label>Endpoint <span style="color:var(--muted)">(leave blank to use companion default)</span></label>
           <input type="text" ...${field('endpoint')}
-            placeholder=${s.provider === 'ollama' ? 'http://localhost:11434' : 'https://api.openai.com'} />
+            placeholder="e.g. http://localhost:8080" />
         </div>
         <div class="field">
-          <label>Model</label>
+          <label>Model <span style="color:var(--muted)">(leave blank to use companion default)</span></label>
           <input type="text" ...${field('model')}
-            placeholder=${s.provider === 'ollama' ? 'llama3.2' : 'gpt-4o'} />
+            placeholder="e.g. llama3.2, gpt-4o, claude-sonnet-4-6" />
         </div>
-        ${s.provider !== 'ollama' && html`
+        ${s.provider === 'openai' || s.provider === 'claude' ? html`
           <div class="field">
             <label>API Key</label>
             <input type="password" ...${field('api_key')} placeholder="sk-..." />
-          </div>`}
+          </div>` : null}
       </div>
 
       <!-- Companion connection -->

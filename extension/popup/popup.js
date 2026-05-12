@@ -480,7 +480,10 @@ function App() {
         <button class=${'tab' + (tab === 'generate' ? ' active' : '')}
           onClick=${() => setTab('generate')}>Generate</button>
         <button class=${'tab' + (tab === 'settings' ? ' active' : '')}
-          onClick=${() => setTab('settings')}>Settings</button>
+          onClick=${() => IN_FULL_TAB
+            ? setTab('settings')
+            : chrome.tabs.create({ url: chrome.runtime.getURL('popup/popup.html') + '?tab=settings' })
+          }>Settings</button>
       </div>
 
       ${tab === 'generate'

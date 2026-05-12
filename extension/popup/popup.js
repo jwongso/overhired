@@ -493,8 +493,7 @@ function App() {
 
 async function parsePdfLocally(file) {
   const wasmUrl = chrome.runtime.getURL('wasm/mupdf.js');
-  const mod     = await import(wasmUrl);
-  const mupdf   = await mod.default();
+  const mupdf   = await import(wasmUrl); // named exports, WASM init via top-level await
 
   const bytes = new Uint8Array(await file.arrayBuffer());
   const doc   = mupdf.Document.openDocument(bytes, 'application/pdf');

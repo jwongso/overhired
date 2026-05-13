@@ -97,11 +97,14 @@ class AIClient:
 
         last_result: dict | None = None
         saved = False
+        last_text: str = ""
 
         for i in range(max_iters):
             response = self._call_with_tools(messages, tools)
             assistant_msg = response["content"]
             tool_calls = response.get("tool_calls", [])
+            # Capture plain-text content for fallback extraction
+            last_text = assistant_msg.get("content") or ""
 
             logger.info("[tools] iter=%d tool_calls=%s", i + 1,
                         [tc["name"] for tc in tool_calls])
@@ -124,9 +127,9 @@ class AIClient:
                         result = {"error": str(exc)}
 
                 last_result = result
-                if tc["name"] == "save_parser":
+                if tc["name"].startswith("save_"):
                     saved = True
-                    logger.info("[tools] save_parser called — domain arg=%s",
+                    logger.info("[tools] %s called — domain arg=%s", tc["name"],
                                 tc["arguments"].get("domain", "<missing>"))
 
                 messages.append({
@@ -143,6 +146,7 @@ class AIClient:
             "result":     last_result,
             "saved":      saved,
             "iterations": i + 1,  # type: ignore[possibly-undefined]
+            "last_text":  last_text,
             "error":      None,
         }
 

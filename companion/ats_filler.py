@@ -192,6 +192,17 @@ def _agentic_fill(domain: str, form_snapshot: list[dict], ai: "AIClient") -> str
         _log.info("[fill] auto-saved filler for %s: %s", domain, save_result)
         return _try_cached(domain, form_snapshot)
 
+    # Fallback: LLM returned code as plain text without calling tools
+    last_text = loop_result.get("last_text", "")
+    if last_text:
+        extracted = _extract_js_from_text(last_text)
+        if extracted and _validate_candidate(extracted, form_snapshot).get("valid"):
+            save_filler(domain=domain, code=extracted)
+            _log.info("[fill] extracted JS from plain text response for %s", domain)
+            return _try_cached(domain, form_snapshot)
+        elif extracted:
+            _log.warning("[fill] extracted JS failed validation for %s", domain)
+
     return None
 
 
@@ -236,6 +247,30 @@ def _reference_tokens(form_snapshot: list[dict], *, include_labels: bool) -> set
                     if len(part) >= 3:
                         tokens.add(part)
     return tokens
+
+
+def _extract_js_from_text(text: str) -> str | None:
+    """Extract a JS function fill(data){...} from a plain LLM text response."""
+    # Try fenced code block first (```js ... ``` or ``` ... ```)
+    fence = re.search(r"```(?:javascript|js)?\s*\n(.*?)```", text, re.DOTALL)
+    if fence:
+        candidate = fence.group(1).strip()
+        if "function fill(" in candidate:
+            return candidate
+
+    # Try extracting from first occurrence of 'function fill(' to matching brace
+    start = text.find("function fill(")
+    if start == -1:
+        return None
+    depth = 0
+    for i, ch in enumerate(text[start:], start):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1].strip()
+    return None
 
 
 def _delete_cached(domain: str) -> None:

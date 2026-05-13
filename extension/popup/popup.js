@@ -539,7 +539,7 @@ function App() {
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
 
   useEffect(() => {
-    load([STORAGE_KEYS.settings]).then(d => {
+    load([STORAGE_KEYS.settings]).then(async d => {
       const raw = d.settings || {};
       const s = {
         companion_url: typeof raw.companion_url === 'string' && raw.companion_url.trim()
@@ -549,7 +549,30 @@ function App() {
       };
       setSettings(s);
       store({ [STORAGE_KEYS.settings]: s });
-      companionHealth(s.companion_url).then(setHealth);
+
+      const h = await companionHealth(s.companion_url);
+      setHealth(h);
+
+      // Seed savedJobs from disk if storage is empty and companion is up
+      if (h) {
+        const stored = await load(['savedJobs']);
+        if (!stored.savedJobs?.length) {
+          try {
+            const headers = s.companion_token
+              ? { Authorization: `Bearer ${s.companion_token}` } : {};
+            const r = await fetch(`${s.companion_url}/jobs/recent`, { headers });
+            if (r.ok) {
+              const data = await r.json();
+              if (data.jobs?.length) {
+                await store({ savedJobs: data.jobs });
+                console.log('[overhired] Seeded', data.jobs.length, 'saved jobs from disk');
+              }
+            }
+          } catch (e) {
+            console.warn('[overhired] Could not seed savedJobs:', e.message);
+          }
+        }
+      }
     });
   }, []);
 

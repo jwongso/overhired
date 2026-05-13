@@ -383,6 +383,39 @@ def job_files(job_id: str, _: None = Depends(_require_token)):
     }
 
 
+# ── /jobs/recent ─────────────────────────────────────────────────────────────
+
+@app.get("/jobs/recent")
+def jobs_recent(limit: int = 5, _: None = Depends(_require_token)):
+    """Return the most recently saved jobs from the output directory.
+
+    Each entry has: title, company, cover_letter_md, saved_at (ISO timestamp).
+    Used by the extension to seed its savedJobs storage after a reload.
+    """
+    out_root = Path(CFG["output_dir"]).expanduser()
+    entries = []
+    if out_root.exists():
+        for company_dir in out_root.iterdir():
+            if not company_dir.is_dir():
+                continue
+            for role_dir in company_dir.iterdir():
+                cl = role_dir / "cover_letter.md"
+                if not cl.exists():
+                    continue
+                entries.append({
+                    "company":          company_dir.name,
+                    "title":            role_dir.name.replace("-", " "),
+                    "cover_letter_md":  cl.read_text(encoding="utf-8"),
+                    "saved_at":         cl.stat().st_mtime,
+                })
+    entries.sort(key=lambda e: e["saved_at"], reverse=True)
+    # Convert mtime float to ISO string for the client
+    for e in entries[:limit]:
+        import datetime
+        e["saved_at"] = datetime.datetime.fromtimestamp(e["saved_at"]).isoformat()
+    return {"jobs": entries[:limit]}
+
+
 # ── /extract ──────────────────────────────────────────────────────────────────
 
 class ExtractRequest(BaseModel):

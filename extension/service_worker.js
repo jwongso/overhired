@@ -9,6 +9,9 @@
 
 const COMPANION_DEFAULT = 'http://localhost:7878';
 
+// Open the side panel when the toolbar icon is clicked.
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+
 /** Build headers for companion requests, injecting auth token when configured. */
 function companionHeaders(settings) {
   const h = { 'Content-Type': 'application/json' };

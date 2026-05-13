@@ -453,7 +453,7 @@ def extract_job(req: ExtractRequest, _: None = Depends(_require_token)):
 @app.post("/fill", response_model=FillResponse)
 def fill_form(req: FillRequest, _: None = Depends(_require_token)):
     logger.info("[fill] domain=%s fields=%d", req.domain, len(req.form_snapshot))
-    operations = ats_filler_module.get_filler(req.domain, req.form_snapshot, AI)
+    operations = ats_filler_module.get_filler(req.domain, req.form_snapshot, AI, req.fill_data)
     if not operations:
         raise HTTPException(status_code=422, detail="Could not generate a filler for this form")
     cached = ats_filler_module.last_cache_hit()

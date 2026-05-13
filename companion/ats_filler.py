@@ -16,14 +16,24 @@ if TYPE_CHECKING:
 FILLERS_DIR = Path("~/.overhired/fillers").expanduser()
 _log = logging.getLogger(__name__)
 _LAST_CACHE_HIT = False
-_ALLOWED_VALUE_KEYS = {"name", "email", "phone", "cover_letter"}
-_ONE_SHOT_SYSTEM_PROMPT = """You are a JSON generator. Output ONLY a valid JSON array — no explanation, no markdown.
-Each element: {"selector": "CSS selector string", "value_key": "name|email|phone|cover_letter"}
-Pick the value_key that best matches each field's purpose.
-"""
+_BASE_ALLOWED_VALUE_KEYS = {
+    "name", "email", "phone", "cover_letter",
+    "linkedin", "github", "website",
+    "location", "work_authorization", "availability", "salary_expectation",
+}
+
+def _make_system_prompt(available_keys: set[str]) -> str:
+    keys_str = "|".join(sorted(available_keys))
+    return (
+        "You are a JSON generator. Output ONLY a valid JSON array — no explanation, no markdown.\n"
+        f'Each element: {{"selector": "CSS selector string", "value_key": "{keys_str}"}}\n'
+        "Pick the value_key that best matches each field's purpose.\n"
+        "Only include fields you can confidently match — skip optional/unknown fields."
+    )
 
 
-def get_filler(domain: str, form_snapshot: list[dict], ai: "AIClient") -> list[dict] | None:
+def get_filler(domain: str, form_snapshot: list[dict], ai: "AIClient",
+               fill_data: dict | None = None) -> list[dict] | None:
     """Return cached or freshly-generated fill operations."""
     global _LAST_CACHE_HIT
 
@@ -40,7 +50,7 @@ def get_filler(domain: str, form_snapshot: list[dict], ai: "AIClient") -> list[d
 
     _LAST_CACHE_HIT = False
     try:
-        operations = _one_shot_fill(domain, form_snapshot, ai)
+        operations = _one_shot_fill(domain, form_snapshot, ai, fill_data or {})
     except Exception as exc:
         _log.warning("[fill] generation failed for %s: %s", domain, exc)
         return None
@@ -76,8 +86,17 @@ def _try_cached(domain: str, form_snapshot: list[dict]) -> list[dict] | None:
         return None
 
 
-def _one_shot_fill(domain: str, form_snapshot: list[dict], ai: "AIClient") -> list[dict] | None:
+def _one_shot_fill(domain: str, form_snapshot: list[dict], ai: "AIClient",
+                   fill_data: dict) -> list[dict] | None:
     """Ask the LLM for a JSON array of field operations."""
+    available_keys = _BASE_ALLOWED_VALUE_KEYS | set(fill_data.keys())
+    system_prompt = _make_system_prompt(available_keys)
+
+    # Show LLM what data is actually available to fill with
+    data_hints = "\n".join(
+        f"- {k}: {repr(v[:80]) if isinstance(v, str) and len(v) > 80 else repr(v)}"
+        for k, v in fill_data.items() if v
+    )
     useful = [field for field in form_snapshot if field.get("id") or field.get("name") or field.get("label")][:20]
     fields_summary = "\n".join(
         f"- id={field.get('id')!r} name={field.get('name')!r} label={field.get('label')!r} "
@@ -86,15 +105,16 @@ def _one_shot_fill(domain: str, form_snapshot: list[dict], ai: "AIClient") -> li
     ) or "- (no usable fields provided)"
     user_prompt = (
         f"Domain: {domain}\n\n"
+        f"Available data to fill with:\n{data_hints or '(none provided)'}\n\n"
         f"Form fields (use only real fields from this list):\n{fields_summary}\n\n"
         "Return the operations array that fills the form. "
         "Each item must include selector and value_key."
     )
     try:
-        raw = ai.generate(_ONE_SHOT_SYSTEM_PROMPT, user_prompt, timeout=ai.tool_timeout).strip()
+        raw = ai.generate(system_prompt, user_prompt, timeout=ai.tool_timeout).strip()
         operations = _extract_json_array(raw)
         if operations:
-            validation = _validate_candidate(operations, form_snapshot)
+            validation = _validate_candidate(operations, form_snapshot, available_keys)
             _log.info("[fill] one-shot validation for %s: %s", domain, validation)
             if validation.get("valid"):
                 return operations
@@ -105,10 +125,13 @@ def _one_shot_fill(domain: str, form_snapshot: list[dict], ai: "AIClient") -> li
 
 def _looks_valid_filler(ops: object, form_snapshot: list[dict]) -> bool:
     """Basic sanity check for generated fill operations."""
-    return bool(_validate_candidate(ops, form_snapshot).get("valid"))
+    return bool(_validate_candidate(ops, form_snapshot, _BASE_ALLOWED_VALUE_KEYS).get("valid"))
 
 
-def _validate_candidate(ops: object, form_snapshot: list[dict]) -> dict:
+def _validate_candidate(ops: object, form_snapshot: list[dict],
+                        allowed_keys: set[str] | None = None) -> dict:
+    if allowed_keys is None:
+        allowed_keys = _BASE_ALLOWED_VALUE_KEYS
     if not isinstance(ops, list) or not ops:
         return {"valid": False, "error": "Operations must be a non-empty list."}
 
@@ -119,7 +142,7 @@ def _validate_candidate(ops: object, form_snapshot: list[dict]) -> dict:
         value_key = op.get("value_key")
         if not isinstance(selector, str) or not selector.strip():
             return {"valid": False, "error": f"Operation {idx} is missing a selector."}
-        if value_key not in _ALLOWED_VALUE_KEYS:
+        if value_key not in allowed_keys:
             return {"valid": False, "error": f"Operation {idx} has invalid value_key {value_key!r}."}
 
     if not _has_field_reference(ops, form_snapshot):

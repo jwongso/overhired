@@ -71,9 +71,16 @@ DEFAULTS: dict[str, Any] = {
         "path": "",   # e.g. ~/Documents/resume.pdf or ~/resume.md
     },
     "profile": {
-        "name":  "",
-        "email": "",
-        "phone": "",
+        "name":               "",
+        "email":              "",
+        "phone":              "",
+        "linkedin":           "",  # e.g. https://linkedin.com/in/yourname
+        "github":             "",  # e.g. https://github.com/yourname
+        "website":            "",  # personal portfolio / homepage
+        "location":           "",  # e.g. Auckland, New Zealand
+        "work_authorization": "",  # e.g. "NZ citizen", "yes", "requires visa sponsorship"
+        "availability":       "",  # e.g. "2 weeks notice", "immediately"
+        "salary_expectation": "",  # e.g. "$120,000 NZD"
     },
 }
 

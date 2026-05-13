@@ -418,11 +418,19 @@ function GenerateTab({ settings, health }) {
         func: captureFormSnapshot,
       });
       const formSnapshot = snapResults[0]?.result || [];
+      const p = health?.profile || {};
       const fillData = {
-        name:         health?.profile?.name || '',
-        email:        health?.profile?.email || '',
-        phone:        health?.profile?.phone || '',
-        cover_letter: result?.cover_letter_md || '',
+        name:                 p.name || '',
+        email:                p.email || '',
+        phone:                p.phone || '',
+        linkedin:             p.linkedin || '',
+        github:               p.github || '',
+        website:              p.website || '',
+        location:             p.location || '',
+        work_authorization:   p.work_authorization || '',
+        availability:         p.availability || '',
+        salary_expectation:   p.salary_expectation || '',
+        cover_letter:         result?.cover_letter_md || '',
       };
 
       // Call /fill directly — bypasses the service worker to avoid MV3 idle timeout

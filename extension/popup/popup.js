@@ -151,7 +151,31 @@ function scrapeJobFromPage() {
     domain: '', page_text: '', formFieldCount: 0,
   };
   info.domain = window.location.hostname.replace(/^www\./, '');
-  info.page_text = (document.body?.innerText || '').slice(0, 12000);
+
+  // Try to narrow to the main job content — avoids noise from nav, related jobs, footer
+  const CONTENT_SELECTORS = [
+    // SEEK
+    '[data-automation="jobDescription"]',
+    '[data-automation="job-detail-title"]',
+    // Greenhouse / Lever / Ashby
+    '#content', '.job-post', '.posting', '.job-description',
+    // LinkedIn
+    '.jobs-description', '.job-details',
+    // Workday
+    '[data-automation-id="jobPostingDescription"]',
+    // Generic
+    'article', 'main', '#main-content', '.job-content',
+  ];
+  let mainEl = null;
+  for (const sel of CONTENT_SELECTORS) {
+    const el = document.querySelector(sel);
+    if (el && (el.innerText || '').trim().length > 200) { mainEl = el; break; }
+  }
+  const rawText = mainEl
+    ? mainEl.innerText
+    : (document.body?.innerText || '');
+
+  info.page_text = rawText.slice(0, 12000);
   info.formFieldCount = document.querySelectorAll('input:not([type=hidden]), textarea, select').length;
   return info;
 }

@@ -24,6 +24,9 @@ VALID_STATUSES = {
 
 # ── Schema ────────────────────────────────────────────────────────────────────
 
+# Bump this whenever the schema changes. Migration code below handles upgrades.
+_SCHEMA_VERSION = 1
+
 _DDL = """
 CREATE TABLE IF NOT EXISTS applications (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,10 +38,35 @@ CREATE TABLE IF NOT EXISTS applications (
     notes        TEXT    NOT NULL DEFAULT '',
     updated_at   TEXT    NOT NULL    -- ISO datetime
 );
-CREATE INDEX IF NOT EXISTS idx_status      ON applications(status);
-CREATE INDEX IF NOT EXISTS idx_company     ON applications(company);
+CREATE INDEX IF NOT EXISTS idx_status       ON applications(status);
+CREATE INDEX IF NOT EXISTS idx_company      ON applications(company);
 CREATE INDEX IF NOT EXISTS idx_date_applied ON applications(date_applied);
 """
+
+# Migration scripts keyed by the version they upgrade FROM.
+# e.g. _MIGRATIONS[1] upgrades schema v1 → v2.
+_MIGRATIONS: dict[int, str] = {
+    # Example (uncomment and edit when v2 is needed):
+    # 1: "ALTER TABLE applications ADD COLUMN url TEXT NOT NULL DEFAULT '';",
+}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Apply any pending schema migrations based on PRAGMA user_version."""
+    current = conn.execute("PRAGMA user_version").fetchone()[0]
+    if current == _SCHEMA_VERSION:
+        return
+    if current > _SCHEMA_VERSION:
+        raise RuntimeError(
+            f"DB schema v{current} is newer than this code (v{_SCHEMA_VERSION}). "
+            "Please update overhired."
+        )
+    for v in range(current, _SCHEMA_VERSION):
+        sql = _MIGRATIONS.get(v)
+        if sql:
+            conn.executescript(sql)
+    conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+    conn.commit()
 
 
 @contextmanager
@@ -48,6 +76,7 @@ def _db():
     conn.row_factory = sqlite3.Row
     try:
         conn.executescript(_DDL)
+        _migrate(conn)
         yield conn
         conn.commit()
     finally:

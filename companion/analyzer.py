@@ -199,9 +199,35 @@ _HEADERS = {
     "Accept": "text/html,application/xhtml+xml",
 }
 
+# Private / loopback IP ranges that must never be fetched (SSRF protection)
+_PRIVATE_NETS = re.compile(
+    r"^(?:"
+    r"127\."                        # loopback
+    r"|10\."                        # RFC-1918
+    r"|192\.168\."                  # RFC-1918
+    r"|172\.(?:1[6-9]|2\d|3[01])\."# RFC-1918
+    r"|169\.254\."                  # link-local
+    r"|::1"                         # IPv6 loopback
+    r"|fc00:"                       # IPv6 ULA
+    r"|fd"                          # IPv6 ULA
+    r")"
+)
+
+
+def _safe_domain(domain: str) -> str:
+    """Validate domain for outbound fetch: must be plain hostname over http/https."""
+    # Strip any scheme/path the caller may have included
+    domain = re.sub(r"^https?://", "", domain).split("/")[0].lower()
+    if not re.match(r"^[a-z0-9]([a-z0-9\-\.]*[a-z0-9])?$", domain):
+        raise ValueError(f"Invalid domain: {domain!r}")
+    if _PRIVATE_NETS.match(domain):
+        raise ValueError(f"Private/loopback domain not allowed: {domain!r}")
+    return domain
+
 
 def _fetch_text(domain: str) -> str:
-    """Fetch text content from a company's key pages."""
+    """Fetch text content from a company's key pages (HTTPS only, no private IPs)."""
+    domain = _safe_domain(domain)   # raises ValueError on bad/private domains
     parts: list[str] = []
     base = f"https://{domain}"
     with httpx.Client(timeout=8, follow_redirects=True, headers=_HEADERS) as client:
@@ -229,7 +255,10 @@ def research_company(domain: str, company_name: str, ai: "AIClient") -> dict:
         domain:       Company website domain, e.g. 'stripe.com'.
         company_name: Human-readable company name, e.g. 'Stripe'.
     """
-    raw_text = _fetch_text(domain)
+    try:
+        raw_text = _fetch_text(domain)
+    except ValueError as exc:
+        return {"error": str(exc)}
 
     if not raw_text:
         raw_text = f"No web content available for {domain}."

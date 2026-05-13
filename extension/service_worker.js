@@ -29,6 +29,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     case 'POLL_FILES':    handlePollFiles(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));      break;
     case 'PARSE_PDF':     handleParsePdf(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));      break;
     case 'EXTRACT':       handleExtract(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));       break;
+    case 'FILL_ATS':      handleFillAts(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));       break;
     case 'DELETE_PARSER': handleDeleteParser(msg).then(sendResponse).catch(err => sendResponse({ error: err.message })); break;
     default: return false;
   }
@@ -168,6 +169,24 @@ async function handleExtract(msg) {
     throw new Error(detail.detail || `Extract failed: ${resp.status}`);
   }
   return resp.json(); // { title, company, description, location }
+}
+
+async function handleFillAts(msg) {
+  const { domain, formSnapshot, fillData, settings } = msg;
+  const resp = await fetch(`${companionUrl(settings)}/fill`, {
+    method: 'POST',
+    headers: companionHeaders(settings),
+    body: JSON.stringify({
+      domain,
+      form_snapshot: formSnapshot,
+      fill_data: fillData,
+    }),
+  });
+  if (!resp.ok) {
+    const detail = await resp.json().catch(() => ({}));
+    throw new Error(detail.detail || `Fill failed: ${resp.status}`);
+  }
+  return resp.json();
 }
 
 // ── DELETE_PARSER ─────────────────────────────────────────────────────────────

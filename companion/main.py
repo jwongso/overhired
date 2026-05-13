@@ -13,6 +13,7 @@ Endpoints:
     POST /generate  — build prompt, call AI, return cover letter (md + html)
     POST /save      — write cover_letter.md + cover_letter.html to disk
     POST /extract   — adaptive job extraction (cached parser or LLM-generated)
+    POST /fill      — adaptive ATS filler generation (cached JS or LLM-generated)
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 import analyzer as analyzer_module
+import ats_filler as ats_filler_module
 import config as cfg_module
 import ai_client as ai_module
 
@@ -256,12 +258,16 @@ def _bg_write_insight(dest: Path, job_description: str, role: str, company: str)
 @app.get("/health")
 def health():
     ai_ok, ai_model = AI.health_check()
+    ats_filler_module.FILLERS_DIR.mkdir(parents=True, exist_ok=True)
+    fillers_cached = sum(1 for _ in ats_filler_module.FILLERS_DIR.glob("*.js"))
     return {
-        "status":      "ok",
-        "ai_provider":  CFG["ai"]["provider"],
-        "ai_model":     ai_model,
-        "ai_endpoint":  CFG["ai"]["endpoint"],
-        "ai_reachable": ai_ok,
+        "status":         "ok",
+        "ai_provider":     CFG["ai"]["provider"],
+        "ai_model":        ai_model,
+        "ai_endpoint":     CFG["ai"]["endpoint"],
+        "ai_reachable":    ai_ok,
+        "fillers_cached":  fillers_cached,
+        "profile":         CFG.get("profile", {}),
     }
 
 
@@ -391,6 +397,17 @@ class ExtractResponse(BaseModel):
     location:    str = ""
 
 
+class FillRequest(BaseModel):
+    domain:        str
+    form_snapshot: list[dict] = Field(default_factory=list)
+    fill_data:     dict = Field(default_factory=dict)
+
+
+class FillResponse(BaseModel):
+    code:   str
+    cached: bool
+
+
 @app.post("/extract", response_model=ExtractResponse)
 def extract_job(req: ExtractRequest, _: None = Depends(_require_token)):
     import extractor
@@ -398,6 +415,17 @@ def extract_job(req: ExtractRequest, _: None = Depends(_require_token)):
     result = extractor.extract(req.domain, req.page_text, AI)
     logger.info("[extract] result: title=%r company=%r", result.get("title",""), result.get("company",""))
     return ExtractResponse(**result)
+
+
+@app.post("/fill", response_model=FillResponse)
+def fill_form(req: FillRequest, _: None = Depends(_require_token)):
+    logger.info("[fill] domain=%s fields=%d", req.domain, len(req.form_snapshot))
+    code = ats_filler_module.get_filler(req.domain, req.form_snapshot, AI)
+    if not code:
+        raise HTTPException(status_code=422, detail="Could not generate a filler for this form")
+    cached = ats_filler_module.last_cache_hit()
+    logger.info("[fill] returning filler for %s (cached=%s)", req.domain, cached)
+    return FillResponse(code=code, cached=cached)
 
 
 @app.get("/parsers")

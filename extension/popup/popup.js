@@ -104,6 +104,26 @@ function scrapeJobFromPage() {
   return info;
 }
 
+function captureFormSnapshot() {
+  const fields = [];
+  document.querySelectorAll('input:not([type=hidden]), textarea, select').forEach(el => {
+    const labelEl = el.id
+      ? document.querySelector(`label[for="${el.id}"]`)
+      : el.closest('label');
+    const label = (labelEl?.textContent || el.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ').slice(0, 100);
+    fields.push({
+      tag:         el.tagName.toLowerCase(),
+      type:        el.type || el.tagName.toLowerCase(),
+      id:          el.id || '',
+      name:        el.name || '',
+      placeholder: el.placeholder || '',
+      label,
+      aria_label:  el.getAttribute('aria-label') || '',
+    });
+  });
+  return fields.slice(0, 50);
+}
+
 // -- Sub-components ------------------------------------------------------------
 
 function CompanionBanner({ health }) {
@@ -164,7 +184,7 @@ function FileStatusBar({ status }) {
 
 // -- Generate tab --------------------------------------------------------------
 
-function GenerateTab({ settings }) {
+function GenerateTab({ settings, health }) {
   const [scanState,  setScanState]  = useState('idle'); // idle | scanning | learning | found
   const [title,      setTitle]      = useState('');
   const [company,    setCompany]    = useState('');
@@ -290,6 +310,50 @@ function GenerateTab({ settings }) {
     }
   }, [title, company, desc, jobDomain, settings]);
 
+  const fillForm = useCallback(async () => {
+    try {
+      setErrMsg('');
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) return;
+      const snapResults = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: captureFormSnapshot,
+      });
+      const formSnapshot = snapResults[0]?.result || [];
+      const fillData = {
+        name:         health?.profile?.name || '',
+        email:        health?.profile?.email || '',
+        phone:        health?.profile?.phone || '',
+        cover_letter: result?.cover_letter_md || '',
+      };
+      const r = await sendMsg({
+        type: 'FILL_ATS',
+        domain: jobDomain,
+        formSnapshot,
+        fillData,
+        settings,
+      });
+      if (r?.error) {
+        setErrMsg(r.error);
+        return;
+      }
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: (code, fillData) => {
+          try {
+            const fn = new Function('data', `${code}\nreturn fill(data);`);
+            return fn(fillData);
+          } catch (e) {
+            return { filled: 0, errors: [e.message] };
+          }
+        },
+        args: [r.code, fillData],
+      });
+    } catch (err) {
+      setErrMsg('Fill form failed: ' + err.message);
+    }
+  }, [result, jobDomain, settings, health]);
+
   // ── Grab screen ───────────────────────────────────────────────────────────────
   if (scanState !== 'found') return html`
     <div class="panel">
@@ -332,11 +396,15 @@ function GenerateTab({ settings }) {
           onClick=${reset}>↩</button>
       </div>
 
-      ${status === 'error' && html`
+      ${errMsg && html`
         <p style="color:var(--danger);font-size:11px;margin-top:8px">${errMsg}</p>`}
 
       ${savedPaths && html`
         <div class="saved-path">Saved: ${savedPaths.md_path}</div>`}
+      ${savedPaths && result && html`
+        <div class="btn-row" style="margin-top:8px;">
+          <button class="btn btn-secondary btn-full" onClick=${fillForm}>Fill Form</button>
+        </div>`}
       ${FileStatusBar({ status: fileStatus })}
 
       ${result && html`
@@ -377,7 +445,7 @@ function App() {
       </div>
 
       <${CompanionBanner} health=${health} />
-      <${GenerateTab} settings=${settings} />
+      <${GenerateTab} settings=${settings} health=${health} />
     </div>`;
 }
 

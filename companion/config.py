@@ -70,6 +70,11 @@ DEFAULTS: dict[str, Any] = {
     "resume": {
         "path": "",   # e.g. ~/Documents/resume.pdf or ~/resume.md
     },
+    "profile": {
+        "name":  "",
+        "email": "",
+        "phone": "",
+    },
 }
 
 

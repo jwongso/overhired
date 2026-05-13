@@ -221,7 +221,6 @@ def _agentic_fill(domain: str, form_snapshot: list[dict], ai: "AIClient") -> str
 
 def _one_shot_fill(domain: str, form_snapshot: list[dict], ai: "AIClient") -> str | None:
     """One-shot fallback: ask the LLM to return ONLY a JS function, no tools, no prose."""
-    # Keep only fields that have an id or name — most actionable for the LLM
     useful = [f for f in form_snapshot if f.get("id") or f.get("name")][:15]
     fields_summary = "\n".join(
         f"  id={f.get('id')!r} name={f.get('name')!r} type={f.get('type')!r} label={f.get('label')!r}"
@@ -236,9 +235,14 @@ def _one_shot_fill(domain: str, form_snapshot: list[dict], ai: "AIClient") -> st
         f"Write a JavaScript function to fill a job application form on {domain}.\n\n"
         f"Signature: function fill(data) {{ }}\n"
         f"data = {{name, email, phone, cover_letter}} (strings)\n\n"
-        f"Fields:\n{fields_summary}\n\n"
+        f"Form fields:\n{fields_summary}\n\n"
+        f"IMPORTANT: This form uses React. To properly update React-controlled inputs you MUST use:\n"
+        f"  const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;\n"
+        f"  nativeInputValueSetter.call(field, value);\n"
+        f"  field.dispatchEvent(new Event('input', {{ bubbles: true }}));\n"
+        f"  field.dispatchEvent(new Event('change', {{ bubbles: true }}));\n\n"
+        f"For textarea fields use HTMLTextAreaElement.prototype instead of HTMLInputElement.prototype.\n\n"
         f"- Use getElementById or querySelector to find fields by id/name\n"
-        f"- Set .value then dispatch input and change events\n"
         f"- Return {{filled: N, errors: []}}\n\n"
         f"BEGIN your response with: function fill(data) {{"
     )

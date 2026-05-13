@@ -251,6 +251,7 @@ function GenerateTab({ settings, health }) {
   const [jobId,      setJobId]      = useState(null);
   const [fileStatus, setFileStatus] = useState(null);
   const [fillState, setFillState] = useState('idle'); // idle | loading | done | error
+  const [fillCount, setFillCount] = useState(0);
   const [atsMode,    setAtsMode]    = useState(false);
   const [atsCandidates, setAtsCandidates] = useState(null); // null | SavedJob[]
 
@@ -364,7 +365,7 @@ function GenerateTab({ settings, health }) {
     setTitle(''); setCompany(''); setDesc(''); setJobDomain('');
     setResult(null); setSavedPaths(null);
     setStatus('idle'); setErrMsg('');
-    setJobId(null); setFileStatus(null); setAtsMode(false); setAtsCandidates(null); setFillState('idle');
+    setJobId(null); setFileStatus(null); setAtsMode(false); setAtsCandidates(null); setFillState('idle'); setFillCount(0);
   }, []);
 
   const generate = useCallback(async () => {
@@ -441,7 +442,7 @@ function GenerateTab({ settings, health }) {
       }
       const r = await resp.json();
 
-      await chrome.scripting.executeScript({
+      const fillResults = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: (code, fillData) => {
           try {
@@ -453,6 +454,18 @@ function GenerateTab({ settings, health }) {
         },
         args: [r.code, fillData],
       });
+      const fillResult = fillResults[0]?.result;
+      if (fillResult?.filled === 0) {
+        const errs = fillResult.errors?.join('; ') || 'No fields matched';
+        setErrMsg(`Filler ran but filled 0 fields — ${errs}. Regenerating next time.`);
+        // Delete cached filler so it regenerates fresh next attempt
+        fetch(`${settings?.companion_url || 'http://localhost:7878'}/parsers/${encodeURIComponent(jobDomain)}`, {
+          method: 'DELETE', headers,
+        }).catch(() => {});
+        setFillState('error');
+        return;
+      }
+      setFillCount(fillResult?.filled || 0);
       setFillState('done');
     } catch (err) {
       setErrMsg('Fill form failed: ' + err.message);
@@ -538,7 +551,7 @@ function GenerateTab({ settings, health }) {
             ${fillState === 'loading'
               ? html`<span class="spinner"></span> Filling form...`
               : fillState === 'done'
-              ? '✅ Form filled'
+              ? `✅ ${fillCount} field${fillCount !== 1 ? 's' : ''} filled`
               : 'Fill Form'}
           </button>
         </div>`}

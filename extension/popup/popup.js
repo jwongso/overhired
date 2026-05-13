@@ -8,11 +8,6 @@ import htm                 from '../vendor/htm.module.js';
 
 const html = htm.bind(h);
 
-// Detect whether we are running as a popup or as a full browser tab.
-// When opened via chrome.tabs.create the URL carries ?tab=settings.
-const SEARCH      = new URLSearchParams(window.location.search);
-const IN_FULL_TAB = SEARCH.has('tab');
-
 const AUSPICE_URL = 'https://fengshui.overhired.work';
 
 async function fetchAuspice() {
@@ -83,17 +78,6 @@ const DEFAULT_SETTINGS = {
   companion_url:   'http://localhost:7878',
   companion_token: '',
 };
-
-function sanitizeSettings(raw = {}) {
-  return {
-    companion_url: typeof raw.companion_url === 'string' && raw.companion_url.trim()
-      ? raw.companion_url
-      : DEFAULT_SETTINGS.companion_url,
-    companion_token: typeof raw.companion_token === 'string'
-      ? raw.companion_token
-      : DEFAULT_SETTINGS.companion_token,
-  };
-}
 
 // -- Utility -------------------------------------------------------------------
 
@@ -186,10 +170,7 @@ function GenerateTab({ settings }) {
   const [company,    setCompany]    = useState('');
   const [desc,       setDesc]       = useState('');
   const [jobDomain,  setJobDomain]  = useState('');
-  const [ats,        setAts]        = useState('generic');
-  const [showDesc,   setShowDesc]   = useState(false);
   const [scanError,  setScanError]  = useState('');
-  const [perJob,     setPerJob]     = useState('');
   const [status,     setStatus]     = useState('idle'); // idle | loading | done | error
   const [result,     setResult]     = useState(null);
   const [errMsg,     setErrMsg]     = useState('');
@@ -228,8 +209,6 @@ function GenerateTab({ settings }) {
     return () => { active = false; };
   }, [jobId, settings]);
 
-  const canGenerate = status !== 'loading';
-
   const scanPage = useCallback(async () => {
     setScanState('scanning');
     setScanError('');
@@ -242,16 +221,6 @@ function GenerateTab({ settings }) {
       });
       const j = results[0]?.result;
 
-      if (j?.title) {
-        setTitle(j.title || '');
-        setCompany(j.company || '');
-        setDesc(j.description || '');
-        setJobDomain(j.domain || '');
-        setAts(j.ats || 'generic');
-        setScanState('found');
-        return;
-      }
-
       setScanState('learning');
       const url = tab.url || '';
       const resp = await sendMsg({
@@ -262,18 +231,17 @@ function GenerateTab({ settings }) {
       });
       if (resp?.error) throw new Error(resp.error);
       if (!resp?.title) {
-        setScanError('Could not detect job info - make sure you are on a job posting page.');
+        setScanError('Could not detect job info — open a specific job posting and try again.');
         setScanState('idle');
         return;
       }
       setTitle(resp.title || '');
       setCompany(resp.company || '');
       setDesc(resp.description || '');
-      setJobDomain(new URL(url).hostname.replace(/^www\./, ''));
-      setAts('generic');
+      setJobDomain(j?.domain || new URL(url).hostname.replace(/^www\./, ''));
       setScanState('found');
     } catch (err) {
-      setScanError(err.message || 'Scan failed.');
+      setScanError(err.message || 'Grab failed.');
       setScanState('idle');
     }
   }, [settings]);
@@ -281,16 +249,10 @@ function GenerateTab({ settings }) {
   const reset = useCallback(() => {
     setScanState('idle');
     setScanError('');
-    setTitle('');
-    setCompany('');
-    setDesc('');
-    setJobDomain('');
-    setResult(null);
-    setSavedPaths(null);
-    setStatus('idle');
-    setErrMsg('');
-    setJobId(null);
-    setFileStatus(null);
+    setTitle(''); setCompany(''); setDesc(''); setJobDomain('');
+    setResult(null); setSavedPaths(null);
+    setStatus('idle'); setErrMsg('');
+    setJobId(null); setFileStatus(null);
   }, []);
 
   const generate = useCallback(async () => {
@@ -303,8 +265,7 @@ function GenerateTab({ settings }) {
     try {
       const resp = await sendMsg({
         type: 'GENERATE',
-        job: { title, company, description: desc, ats },
-        perJobInstructions: perJob,
+        job: { title, company, description: desc },
         settings,
       });
       if (resp.error) throw new Error(resp.error);
@@ -312,8 +273,7 @@ function GenerateTab({ settings }) {
       setStatus('done');
       sendMsg({
         type: 'SAVE',
-        company,
-        role: title,
+        company, role: title,
         coverMd: resp.cover_letter_md,
         coverHtml: resp.cover_letter_html,
         domain: jobDomain,
@@ -328,26 +288,9 @@ function GenerateTab({ settings }) {
       setErrMsg(e.message);
       setStatus('error');
     }
-  }, [title, company, desc, jobDomain, ats, perJob, settings]);
+  }, [title, company, desc, jobDomain, settings]);
 
-  const fillForm = useCallback(async () => {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) { setErrMsg('Could not access the active tab.'); return; }
-    try {
-      const resp = await chrome.tabs.sendMessage(tab.id, {
-        type: 'FILL_FORM',
-        coverLetter: result?.cover_letter_md || '',
-      });
-      if (resp?.error) setErrMsg('Fill form: ' + resp.error);
-    } catch (err) {
-      setErrMsg(
-        err.message?.includes('Receiving end does not exist')
-          ? 'Content script not ready - refresh the job page and try again.'
-          : 'Fill form failed: ' + err.message
-      );
-    }
-  }, [result]);
-
+  // ── Grab screen ───────────────────────────────────────────────────────────────
   if (scanState !== 'found') return html`
     <div class="panel">
       <${FengShuiPanel} />
@@ -355,63 +298,38 @@ function GenerateTab({ settings }) {
       <button class="btn btn-primary btn-full" style="margin-bottom:8px"
         disabled=${scanState === 'scanning' || scanState === 'learning'} onClick=${scanPage}>
         ${scanState === 'scanning'
-          ? html`<span class="spinner"></span> Scanning...`
+          ? html`<span class="spinner"></span> Grabbing...`
           : scanState === 'learning'
           ? html`<span class="spinner"></span> Learning this site...`
-          : 'Scan Page'}
+          : 'Grab Page'}
       </button>
       ${scanState === 'learning' && html`
         <p style="color:var(--muted);font-size:11px;margin-top:0">
-          This site hasn't been seen before. The companion is generating a parser - this takes ~30s once, then it's instant.
+          First visit — companion is building a parser. Takes ~30s once, instant after.
         </p>`}
       ${scanError && html`
-        <p style="color:var(--muted);font-size:11px;margin-top:0">${scanError}</p>`}
+        <p style="color:var(--danger);font-size:11px;margin-top:0">${scanError}</p>`}
     </div>`;
 
+  // ── Generate screen ───────────────────────────────────────────────────────────
   return html`
     <div class="panel">
       <${FengShuiPanel} />
-      ${ListPageBanner({ url: tabUrl })}
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
-        <div class="field" style="margin-bottom:0">
-          <label>Role</label>
-          <input type="text" value=${title} onInput=${e => setTitle(e.target.value)} />
-        </div>
-        <div class="field" style="margin-bottom:0">
-          <label>Company</label>
-          <input type="text" value=${company} onInput=${e => setCompany(e.target.value)} />
-        </div>
-      </div>
-
-      <div class="field">
-        <label style="cursor:pointer" onClick=${() => setShowDesc(v => !v)}>
-          Job Description ${desc ? '(loaded)' : '(none)'} ${showDesc ? '[hide]' : '[show/edit]'}
-        </label>
-        ${showDesc && html`
-          <textarea rows=5 value=${desc} onInput=${e => setDesc(e.target.value)}
-            placeholder="Paste job description..." />`}
-      </div>
-
-      <div class="field">
-        <label>Notes for this application</label>
-        <textarea placeholder="e.g. Mention I'm willing to relocate..."
-          value=${perJob} onInput=${e => setPerJob(e.target.value)} rows=2 />
+      <div style="margin-bottom:10px;font-size:13px;">
+        <strong>${title}</strong>
+        <span style="color:var(--muted)"> @ ${company}</span>
       </div>
 
       <div class="btn-row">
-        <button class="btn btn-primary btn-full" disabled=${!canGenerate} onClick=${generate}>
+        <button class="btn btn-primary btn-full"
+          disabled=${status === 'loading'} onClick=${generate}>
           ${status === 'loading'
             ? html`<span class="spinner"></span> Generating...`
             : 'Generate Cover Letter'}
         </button>
-        ${result && html`
-          <button class="btn btn-secondary" onClick=${fillForm}>Fill Form</button>`}
-      </div>
-
-      <div style="margin-top:8px;text-align:right">
-        <button class="btn btn-secondary" style="font-size:11px;padding:4px 10px"
-          onClick=${reset}>Scan another page</button>
+        <button class="btn btn-secondary" style="font-size:11px"
+          onClick=${reset}>↩</button>
       </div>
 
       ${status === 'error' && html`
@@ -428,61 +346,21 @@ function GenerateTab({ settings }) {
     </div>`;
 }
 
-// -- Settings tab --------------------------------------------------------------
-
-function SettingsTab({ settings, onSave }) {
-  const [s, setS] = useState(settings);
-  const [saved, setSaved] = useState(false);
-
-  useEffect(() => {
-    setS(settings);
-  }, [settings]);
-
-  const field = (key) => ({
-    value: s[key] ?? '',
-    onInput: e => setS(prev => ({ ...prev, [key]: e.target.value })),
-  });
-
-  const saveAll = async () => {
-    const next = sanitizeSettings(s);
-    await store({ [STORAGE_KEYS.settings]: next });
-    onSave(next);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  };
-
-  return html`
-    <div class="panel">
-      <div class="settings-section">
-        <div class="settings-title">Companion Connection</div>
-        <div class="field">
-          <label>URL</label>
-          <input type="text" ...${field('companion_url')}
-            placeholder="http://localhost:7878" />
-        </div>
-        <div class="field">
-          <label>Auth Token <span style="color:var(--muted)">(optional)</span></label>
-          <input type="password" ...${field('companion_token')}
-            placeholder="Match auth_token in companion config.toml" />
-        </div>
-      </div>
-
-      <button class="btn btn-primary btn-full" onClick=${saveAll}>
-        ${saved ? 'Saved!' : 'Save Settings'}
-      </button>
-    </div>`;
-}
-
 // -- Root App ------------------------------------------------------------------
 
 function App() {
-  const [tab,      setTab]      = useState(IN_FULL_TAB ? 'settings' : 'generate');
   const [health,   setHealth]   = useState(undefined);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
 
   useEffect(() => {
     load([STORAGE_KEYS.settings]).then(d => {
-      const s = sanitizeSettings(d.settings || {});
+      const raw = d.settings || {};
+      const s = {
+        companion_url: typeof raw.companion_url === 'string' && raw.companion_url.trim()
+          ? raw.companion_url : DEFAULT_SETTINGS.companion_url,
+        companion_token: typeof raw.companion_token === 'string'
+          ? raw.companion_token : DEFAULT_SETTINGS.companion_token,
+      };
       setSettings(s);
       store({ [STORAGE_KEYS.settings]: s });
       companionHealth(s.companion_url).then(setHealth);
@@ -499,23 +377,7 @@ function App() {
       </div>
 
       <${CompanionBanner} health=${health} />
-
-      <div class="tabs">
-        <button class=${'tab' + (tab === 'generate' ? ' active' : '')}
-          onClick=${() => setTab('generate')}>Generate</button>
-        <button class=${'tab' + (tab === 'settings' ? ' active' : '')}
-          onClick=${() => IN_FULL_TAB
-            ? setTab('settings')
-            : chrome.tabs.create({ url: chrome.runtime.getURL('popup/popup.html') + '?tab=settings' })
-          }>Settings</button>
-      </div>
-
-      ${tab === 'generate'
-        ? html`<${GenerateTab} settings=${settings} />`
-        : html`<${SettingsTab} settings=${settings} onSave=${s => {
-            setSettings(s);
-            companionHealth(s.companion_url).then(setHealth);
-          }} />`}
+      <${GenerateTab} settings=${settings} />
     </div>`;
 }
 

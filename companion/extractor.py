@@ -78,8 +78,27 @@ def extract(domain: str, page_text: str, ai: "AIClient") -> dict:
         return dict(_EMPTY)
 
 
+def _looks_valid_title(title: str, domain: str) -> bool:
+    """Heuristic sanity check — returns False if title looks like parser output is stale/broken."""
+    if not title or len(title) < 5:
+        return False
+    if len(title) > 150 or "\n" in title:
+        return False
+    # Title matches bare domain name or its root (e.g. "SEEK", "LinkedIn", "Indeed")
+    domain_root = domain.split(".")[0].lower()
+    if title.strip().lower() == domain_root:
+        return False
+    return True
+
+
 def _try_cached(domain: str, page_text: str) -> dict | None:
-    """Run the cached parser for domain. Returns None on miss or error."""
+    """Run the cached parser for domain. Returns None on miss or error.
+
+    Self-healing: deletes and returns None if the parser crashes, returns
+    empty, or returns a title that fails basic sanity checks (too short,
+    matches the domain name, etc.) — triggering the agentic loop to
+    regenerate a fresh parser.
+    """
     from tool_server import _safe_domain
     path = PARSERS_DIR / f"{_safe_domain(domain)}.py"
     if not path.exists():
@@ -90,14 +109,24 @@ def _try_cached(domain: str, page_text: str) -> dict | None:
         exec(compile(code, str(path), "exec"), ns)  # noqa: S102
         fn = ns.get("extract")
         if not callable(fn):
+            _log.warning("[cache] parser for %s has no extract() — deleting", domain)
+            path.unlink(missing_ok=True)
             return None
         result = fn(page_text)
-        if isinstance(result, dict) and result.get("title"):
-            return {k: str(result.get(k, "")) for k in _EMPTY}
-        # Broken — delete so it regenerates
-        path.unlink(missing_ok=True)
-        return None
-    except Exception:
+        if not isinstance(result, dict):
+            _log.warning("[cache] parser for %s returned non-dict — deleting", domain)
+            path.unlink(missing_ok=True)
+            return None
+        title = result.get("title", "")
+        if not _looks_valid_title(title, domain):
+            _log.warning("[cache] parser for %s returned suspicious title %r — deleting for regeneration",
+                         domain, title)
+            path.unlink(missing_ok=True)
+            return None
+        _log.info("[cache] hit for %s — title=%r", domain, title)
+        return {k: str(result.get(k, "")) for k in _EMPTY}
+    except Exception as exc:
+        _log.warning("[cache] parser for %s crashed (%s) — deleting for regeneration", domain, exc)
         path.unlink(missing_ok=True)
         return None
 

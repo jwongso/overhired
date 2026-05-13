@@ -62,11 +62,11 @@ class AIClient:
 
     # ── Public ────────────────────────────────────────────────────────────────
 
-    def generate(self, system_prompt: str, user_prompt: str) -> str:
+    def generate(self, system_prompt: str, user_prompt: str, *, timeout: float | None = None) -> str:
         """Send a chat request and return the assistant reply as a string."""
         if self.provider == "claude":
             return self._claude(system_prompt, user_prompt)
-        return self._openai_compatible(system_prompt, user_prompt)
+        return self._openai_compatible(system_prompt, user_prompt, timeout=timeout)
 
     def generate_with_tools(
         self,
@@ -175,8 +175,9 @@ class AIClient:
 
     # ── OpenAI-compatible (Ollama, llama.cpp, OpenAI) ────────────────────────
 
-    def _openai_compatible(self, system: str, user: str) -> str:
+    def _openai_compatible(self, system: str, user: str, *, timeout: float | None = None) -> str:
         url = f"{self.endpoint}/v1/chat/completions"
+        t = timeout if timeout is not None else self.timeout
         payload = {
             "model": self.model,
             "messages": [
@@ -196,12 +197,12 @@ class AIClient:
                 url,
                 headers=self._openai_headers(),
                 json=payload,
-                timeout=self.timeout,
+                timeout=t,
             )
             resp.raise_for_status()
         except httpx.TimeoutException:
             raise AIError(
-                f"AI request timed out after {self.timeout}s. "
+                f"AI request timed out after {t}s. "
                 "Is Ollama running? Try: ollama serve"
             )
         except httpx.HTTPStatusError as exc:

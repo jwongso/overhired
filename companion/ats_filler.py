@@ -221,30 +221,30 @@ def _agentic_fill(domain: str, form_snapshot: list[dict], ai: "AIClient") -> str
 
 def _one_shot_fill(domain: str, form_snapshot: list[dict], ai: "AIClient") -> str | None:
     """One-shot fallback: ask the LLM to return ONLY a JS function, no tools, no prose."""
+    # Keep only fields that have an id or name — most actionable for the LLM
+    useful = [f for f in form_snapshot if f.get("id") or f.get("name")][:15]
     fields_summary = "\n".join(
-        f"  - id={f.get('id')!r} name={f.get('name')!r} label={f.get('label')!r} type={f.get('type')!r}"
-        for f in form_snapshot[:20]
+        f"  id={f.get('id')!r} name={f.get('name')!r} type={f.get('type')!r} label={f.get('label')!r}"
+        for f in useful
     )
     system = (
         "You are a JavaScript code generator. "
-        "Output ONLY raw JavaScript — no explanation, no markdown, no prose. "
-        "Do not use code fences. Start your response with 'function fill(data) {' and end with '}'."
+        "Output ONLY a raw JavaScript function — no explanation, no markdown fences, no prose. "
+        "Your entire response must be valid JavaScript starting with 'function fill(data) {'"
     )
     user = (
-        f"Write a JavaScript function that fills this ATS job application form on {domain}.\n\n"
-        f"Function signature: function fill(data) {{ ... }}\n"
-        f"Parameter: data = {{name, email, phone, cover_letter}} (all strings)\n\n"
-        f"Form fields:\n{fields_summary}\n\n"
-        f"Requirements:\n"
-        f"- Use document.querySelector or getElementById to find each field\n"
-        f"- Set .value and dispatch input + change events for React/Angular\n"
-        f"- Return {{filled: number, errors: string[]}}\n\n"
-        f"Output ONLY the JavaScript function. Start with: function fill(data) {{"
+        f"Write a JavaScript function to fill a job application form on {domain}.\n\n"
+        f"Signature: function fill(data) {{ }}\n"
+        f"data = {{name, email, phone, cover_letter}} (strings)\n\n"
+        f"Fields:\n{fields_summary}\n\n"
+        f"- Use getElementById or querySelector to find fields by id/name\n"
+        f"- Set .value then dispatch input and change events\n"
+        f"- Return {{filled: N, errors: []}}\n\n"
+        f"BEGIN your response with: function fill(data) {{"
     )
     try:
-        raw = ai.generate(system, user).strip()
+        raw = ai.generate(system, user, timeout=ai.tool_timeout).strip()
         _log.debug("[fill] one-shot raw for %s: %r", domain, raw[:300])
-        # Strip any accidental fences the model adds
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         extracted = _extract_js_from_text(raw) or (raw if "function fill(" in raw else None)

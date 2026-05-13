@@ -13,9 +13,12 @@ generate_with_tools() runs an OpenAI-compatible tool-use agentic loop.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 OLLAMA_DEFAULT_ENDPOINT = "http://localhost:11434"
 OPENAI_DEFAULT_ENDPOINT = "https://api.openai.com"
@@ -39,7 +42,13 @@ class AIClient:
         self.provider = ai_cfg.get("provider", "ollama").lower()
         self.model    = ai_cfg.get("model", "llama3.2")
         self.api_key  = ai_cfg.get("api_key", "")
-        self.timeout  = float(ai_cfg.get("timeout", 120))
+        self.timeout      = float(ai_cfg.get("timeout", 120))
+        # tool_timeout is used for agentic tool-calling loops, which can be
+        # much slower (multiple model calls, large context).  Defaults to 3x
+        # the regular timeout if not explicitly set.
+        self.tool_timeout = float(
+            ai_cfg.get("tool_timeout", max(self.timeout * 3, 360))
+        )
 
         raw_endpoint = ai_cfg.get("endpoint", "").rstrip("/")
         if not raw_endpoint:
@@ -94,6 +103,9 @@ class AIClient:
             assistant_msg = response["content"]
             tool_calls = response.get("tool_calls", [])
 
+            logger.info("[tools] iter=%d tool_calls=%s", i + 1,
+                        [tc["name"] for tc in tool_calls])
+
             # Append assistant turn (with or without tool_calls)
             messages.append(assistant_msg)
 
@@ -114,6 +126,8 @@ class AIClient:
                 last_result = result
                 if tc["name"] == "save_parser":
                     saved = True
+                    logger.info("[tools] save_parser called — domain arg=%s",
+                                tc["arguments"].get("domain", "<missing>"))
 
                 messages.append({
                     "role":         "tool",
@@ -128,7 +142,7 @@ class AIClient:
         return {
             "result":     last_result,
             "saved":      saved,
-            "iterations": i + 1,
+            "iterations": i + 1,  # type: ignore[possibly-undefined]
             "error":      None,
         }
 
@@ -227,11 +241,11 @@ class AIClient:
                 url,
                 headers=self._openai_headers(),
                 json=payload,
-                timeout=self.timeout,
+                timeout=self.tool_timeout,
             )
             resp.raise_for_status()
         except httpx.TimeoutException:
-            raise AIError(f"Tool-use request timed out after {self.timeout}s.")
+            raise AIError(f"Tool-use request timed out after {self.tool_timeout}s.")
         except httpx.HTTPStatusError as exc:
             raise AIError(f"AI provider returned {exc.response.status_code}: "
                           f"{exc.response.text[:300]}")

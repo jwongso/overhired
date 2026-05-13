@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import html as _html
+import logging
 import re
 import sys
 import textwrap
@@ -35,6 +36,13 @@ import config as cfg_module
 import ai_client as ai_module
 
 # ── Boot ─────────────────────────────────────────────────────────────────────
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    stream=sys.stdout,
+)
+logger = logging.getLogger(__name__)
 
 CFG = cfg_module.load()
 AI  = ai_module.AIClient(CFG["ai"])

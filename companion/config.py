@@ -44,7 +44,8 @@ DEFAULTS: dict[str, Any] = {
         "endpoint": "http://localhost:11434",
         "model":    "llama3.2",
         "api_key":  "",
-        "timeout":  120,            # seconds; large models can be slow
+        "timeout":      120,            # seconds for regular generate() calls
+        "tool_timeout": 360,            # seconds per call in agentic tool loops (slow models)
     },
     "cover_letter": {
         "max_words":          450,

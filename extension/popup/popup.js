@@ -250,6 +250,7 @@ function GenerateTab({ settings, health }) {
   const [tabUrl,     setTabUrl]     = useState('');
   const [jobId,      setJobId]      = useState(null);
   const [fileStatus, setFileStatus] = useState(null);
+  const [fillState, setFillState] = useState('idle'); // idle | loading | done | error
   const [atsMode,    setAtsMode]    = useState(false);
   const [atsCandidates, setAtsCandidates] = useState(null); // null | SavedJob[]
 
@@ -363,7 +364,7 @@ function GenerateTab({ settings, health }) {
     setTitle(''); setCompany(''); setDesc(''); setJobDomain('');
     setResult(null); setSavedPaths(null);
     setStatus('idle'); setErrMsg('');
-    setJobId(null); setFileStatus(null); setAtsMode(false); setAtsCandidates(null);
+    setJobId(null); setFileStatus(null); setAtsMode(false); setAtsCandidates(null); setFillState('idle');
   }, []);
 
   const generate = useCallback(async () => {
@@ -405,10 +406,12 @@ function GenerateTab({ settings, health }) {
   }, [title, company, desc, jobDomain, settings]);
 
   const fillForm = useCallback(async () => {
+    if (fillState === 'loading') return;
     try {
+      setFillState('loading');
       setErrMsg('');
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab?.id) return;
+      if (!tab?.id) { setFillState('idle'); return; }
       const snapResults = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: captureFormSnapshot,
@@ -429,6 +432,7 @@ function GenerateTab({ settings, health }) {
       });
       if (r?.error) {
         setErrMsg(r.error);
+        setFillState('error');
         return;
       }
       await chrome.scripting.executeScript({
@@ -443,10 +447,12 @@ function GenerateTab({ settings, health }) {
         },
         args: [r.code, fillData],
       });
+      setFillState('done');
     } catch (err) {
       setErrMsg('Fill form failed: ' + err.message);
+      setFillState('error');
     }
-  }, [result, jobDomain, settings, health]);
+  }, [result, jobDomain, settings, health, fillState]);
 
   // ── ATS job picker (ambiguous match) ─────────────────────────────────────────
   if (atsCandidates) return html`
@@ -521,7 +527,14 @@ function GenerateTab({ settings, health }) {
         <div class="saved-path">${atsMode ? savedPaths.md_path : 'Saved: ' + savedPaths.md_path}</div>`}
       ${savedPaths && result && html`
         <div class="btn-row" style="margin-top:8px;">
-          <button class="btn btn-secondary btn-full" onClick=${fillForm}>Fill Form</button>
+          <button class="btn btn-secondary btn-full"
+            disabled=${fillState === 'loading'} onClick=${fillForm}>
+            ${fillState === 'loading'
+              ? html`<span class="spinner"></span> Filling form...`
+              : fillState === 'done'
+              ? '✅ Form filled'
+              : 'Fill Form'}
+          </button>
         </div>`}
       ${FileStatusBar({ status: fileStatus })}
 

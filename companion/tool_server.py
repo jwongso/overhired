@@ -121,11 +121,16 @@ TOOLS: list[dict] = [
 # ── Tool implementations ───────────────────────────────────────────────────────
 
 _SAFE_BUILTINS = {
+    # Built-in functions
     "abs", "all", "any", "bool", "chr", "dict", "enumerate", "filter",
     "float", "frozenset", "int", "isinstance", "issubclass", "iter", "len",
     "list", "map", "max", "min", "next", "ord", "print", "range", "repr",
     "reversed", "round", "set", "slice", "sorted", "str", "sum", "tuple",
     "type", "zip",
+    # Exception types — needed for normal Python code (raise/except)
+    "Exception", "ValueError", "TypeError", "KeyError", "IndexError",
+    "AttributeError", "RuntimeError", "StopIteration", "NotImplementedError",
+    "AssertionError",
 }
 
 

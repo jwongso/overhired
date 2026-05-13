@@ -92,15 +92,67 @@ async function companionHealth(url = 'http://localhost:7878') {
   } catch { return null; }
 }
 
+// Persist a saved job into the savedJobs list (max 5, newest first).
+async function persistSavedJob(entry) {
+  const stored = await load(['savedJobs']);
+  const list = (stored.savedJobs || []).filter(j =>
+    !(j.title === entry.title && j.company === entry.company)
+  );
+  list.unshift(entry);
+  await store({ savedJobs: list.slice(0, 5) });
+}
+
+// Extract a company slug from an ATS URL for matching.
+// Returns lowercase slug string or '' if none found.
+function extractAtsSlug(url) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname; // e.g. jobs.ashby.com, boards.greenhouse.io
+    const parts = u.pathname.split('/').filter(Boolean);
+    // Workday: companyname.wd1.myworkdayjobs.com
+    const wdMatch = host.match(/^([^.]+)\.wd\d+\.myworkdayjobs\.com$/);
+    if (wdMatch) return wdMatch[1].toLowerCase();
+    // SmartRecruiters: jobs.smartrecruiters.com/CompanyName/...
+    if (host.includes('smartrecruiters.com') && parts[0]) return parts[0].toLowerCase();
+    // Ashby: jobs.ashby.com/companyslug/...
+    if (host.includes('ashby.com') && parts[0]) return parts[0].toLowerCase();
+    // Greenhouse: boards.greenhouse.io/companyslug/...
+    if (host.includes('greenhouse.io') && parts[0]) return parts[0].toLowerCase();
+    // Lever: jobs.lever.co/companyslug/...
+    if (host.includes('lever.co') && parts[0]) return parts[0].toLowerCase();
+    // Jobvite: jobs.jobvite.com/companyslug/...
+    if (host.includes('jobvite.com') && parts[0]) return parts[0].toLowerCase();
+    // Generic: first non-empty path segment
+    return (parts[0] || '').toLowerCase();
+  } catch { return ''; }
+}
+
+// Normalise a string for fuzzy matching: lowercase, strip non-alphanumeric.
+function norm(s) { return (s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+
+// Score how well an ATS slug matches a saved job's company name (0–1).
+function matchScore(slug, company) {
+  if (!slug) return 0;
+  const s = norm(slug), c = norm(company);
+  if (!s || !c) return 0;
+  if (s === c) return 1;
+  if (c.includes(s) || s.includes(c)) return 0.8;
+  // Partial overlap: check if slug is a prefix/suffix of company or vice-versa
+  const minLen = Math.min(s.length, c.length);
+  if (minLen >= 3 && (c.startsWith(s.slice(0, minLen)) || s.startsWith(c.slice(0, minLen)))) return 0.6;
+  return 0;
+}
+
 // Self-contained page scraper injected via chrome.scripting.executeScript.
 // Must NOT reference any outer variables - it is serialised and run in the page.
 function scrapeJobFromPage() {
   const info = {
     title: '', company: '', description: '', location: '', ats: 'generic',
-    domain: '', page_text: '',
+    domain: '', page_text: '', formFieldCount: 0,
   };
   info.domain = window.location.hostname.replace(/^www\./, '');
   info.page_text = (document.body?.innerText || '').slice(0, 12000);
+  info.formFieldCount = document.querySelectorAll('input:not([type=hidden]), textarea, select').length;
   return info;
 }
 
@@ -198,6 +250,8 @@ function GenerateTab({ settings, health }) {
   const [tabUrl,     setTabUrl]     = useState('');
   const [jobId,      setJobId]      = useState(null);
   const [fileStatus, setFileStatus] = useState(null);
+  const [atsMode,    setAtsMode]    = useState(false);
+  const [atsCandidates, setAtsCandidates] = useState(null); // null | SavedJob[]
 
   useEffect(() => {
     chrome.tabs.query({ active: true, currentWindow: true })
@@ -229,6 +283,17 @@ function GenerateTab({ settings, health }) {
     return () => { active = false; };
   }, [jobId, settings]);
 
+  const loadAtsJob = useCallback((job, atsDomain) => {
+    setResult({ cover_letter_md: job.cover_letter_md });
+    setSavedPaths({ md_path: `Last: ${job.title} @ ${job.company}` });
+    setTitle(job.title || '');
+    setCompany(job.company || '');
+    setJobDomain(atsDomain);
+    setAtsMode(true);
+    setAtsCandidates(null);
+    setScanState('found');
+  }, []);
+
   const scanPage = useCallback(async () => {
     setScanState('scanning');
     setScanError('');
@@ -240,6 +305,32 @@ function GenerateTab({ settings, health }) {
         func: scrapeJobFromPage,
       });
       const j = results[0]?.result;
+
+      // Detect ATS application form (≥3 visible fields) — skip extraction
+      if ((j?.formFieldCount || 0) >= 3) {
+        const stored = await load(['savedJobs']);
+        const savedJobs = stored.savedJobs || [];
+        if (!savedJobs.length) {
+          setScanError('ATS form detected but no recent applications found — generate a cover letter on the job posting first.');
+          setScanState('idle');
+          return;
+        }
+        // Try to match company slug from URL
+        const slug = extractAtsSlug(tab.url || '');
+        const scored = savedJobs.map(job => ({ job, score: matchScore(slug, job.company) }));
+        const best = scored.reduce((a, b) => b.score > a.score ? b : a);
+        if (best.score >= 0.8) {
+          // Clear winner — auto-load
+          loadAtsJob(best.job, j.domain);
+        } else {
+          // Ambiguous — show picker
+          setScanState('idle');
+          setAtsCandidates(savedJobs);
+          setJobDomain(j.domain);
+          setAtsMode(true);
+        }
+        return;
+      }
 
       setScanState('learning');
       const url = tab.url || '';
@@ -264,7 +355,7 @@ function GenerateTab({ settings, health }) {
       setScanError(err.message || 'Grab failed.');
       setScanState('idle');
     }
-  }, [settings]);
+  }, [settings, loadAtsJob]);
 
   const reset = useCallback(() => {
     setScanState('idle');
@@ -272,7 +363,7 @@ function GenerateTab({ settings, health }) {
     setTitle(''); setCompany(''); setDesc(''); setJobDomain('');
     setResult(null); setSavedPaths(null);
     setStatus('idle'); setErrMsg('');
-    setJobId(null); setFileStatus(null);
+    setJobId(null); setFileStatus(null); setAtsMode(false); setAtsCandidates(null);
   }, []);
 
   const generate = useCallback(async () => {
@@ -301,7 +392,10 @@ function GenerateTab({ settings, health }) {
         resumeText: '',
         settings,
       }).then(r => {
-        if (r?.md_path) setSavedPaths(r);
+        if (r?.md_path) {
+          setSavedPaths(r);
+          persistSavedJob({ title, company, jobDomain, cover_letter_md: resp.cover_letter_md, savedAt: Date.now() });
+        }
         if (r?.job_id) setJobId(r.job_id);
       }).catch(err => console.warn('[overhired] Auto-save failed:', err.message));
     } catch (e) {
@@ -354,6 +448,22 @@ function GenerateTab({ settings, health }) {
     }
   }, [result, jobDomain, settings, health]);
 
+  // ── ATS job picker (ambiguous match) ─────────────────────────────────────────
+  if (atsCandidates) return html`
+    <div class="panel">
+      <${FengShuiPanel} />
+      <p style="font-size:12px;color:var(--muted);margin-bottom:8px">
+        ATS form detected — which application are you filling in?
+      </p>
+      ${atsCandidates.map(job => html`
+        <button key=${job.title + job.company} class="btn btn-secondary btn-full"
+          style="margin-bottom:6px;text-align:left"
+          onClick=${() => loadAtsJob(job, jobDomain)}>
+          <strong>${job.title}</strong> <span style="color:var(--muted)">@ ${job.company}</span>
+        </button>`)}
+      <button class="btn" style="font-size:11px;margin-top:4px" onClick=${reset}>↩ Cancel</button>
+    </div>`;
+
   // ── Grab screen ───────────────────────────────────────────────────────────────
   if (scanState !== 'found') return html`
     <div class="panel">
@@ -383,31 +493,39 @@ function GenerateTab({ settings, health }) {
       <div style="margin-bottom:10px;font-size:13px;">
         <strong>${title}</strong>
         <span style="color:var(--muted)"> @ ${company}</span>
+        ${atsMode && html`<span style="font-size:11px;color:var(--muted);display:block;margin-top:2px">
+          🖊 ATS form ready to fill
+        </span>`}
       </div>
 
-      <div class="btn-row">
-        <button class="btn btn-primary btn-full"
-          disabled=${status === 'loading'} onClick=${generate}>
-          ${status === 'loading'
-            ? html`<span class="spinner"></span> Generating...`
-            : 'Generate Cover Letter'}
-        </button>
-        <button class="btn btn-secondary" style="font-size:11px"
-          onClick=${reset}>↩</button>
-      </div>
+      ${!atsMode && html`
+        <div class="btn-row">
+          <button class="btn btn-primary btn-full"
+            disabled=${status === 'loading'} onClick=${generate}>
+            ${status === 'loading'
+              ? html`<span class="spinner"></span> Generating...`
+              : 'Generate Cover Letter'}
+          </button>
+          <button class="btn btn-secondary" style="font-size:11px"
+            onClick=${reset}>↩</button>
+        </div>`}
+
+      ${atsMode && html`
+        <button class="btn btn-secondary" style="font-size:11px;margin-bottom:8px"
+          onClick=${reset}>↩ Back</button>`}
 
       ${errMsg && html`
         <p style="color:var(--danger);font-size:11px;margin-top:8px">${errMsg}</p>`}
 
       ${savedPaths && html`
-        <div class="saved-path">Saved: ${savedPaths.md_path}</div>`}
+        <div class="saved-path">${atsMode ? savedPaths.md_path : 'Saved: ' + savedPaths.md_path}</div>`}
       ${savedPaths && result && html`
         <div class="btn-row" style="margin-top:8px;">
           <button class="btn btn-secondary btn-full" onClick=${fillForm}>Fill Form</button>
         </div>`}
       ${FileStatusBar({ status: fileStatus })}
 
-      ${result && html`
+      ${!atsMode && result && html`
         <div class="preview" dangerouslySetInnerHTML=${{
           __html: marked.parse(result.cover_letter_md || '')
         }} />`}

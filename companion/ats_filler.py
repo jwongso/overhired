@@ -206,8 +206,55 @@ def _agentic_fill(domain: str, form_snapshot: list[dict], ai: "AIClient") -> str
                 _log.info("[fill] auto-saved extracted filler for %s", domain)
                 return _try_cached(domain, form_snapshot)
         else:
-            _log.warning("[fill] could not extract JS function from LLM text for %s", domain)
+            _log.warning("[fill] could not extract JS function from LLM text for %s — trying one-shot", domain)
 
+    # Last resort: one-shot direct ask (no tools, very explicit prompt)
+    _log.info("[fill] trying one-shot fallback for %s", domain)
+    code = _one_shot_fill(domain, form_snapshot, ai)
+    if code:
+        save_filler(domain=domain, code=code)
+        _log.info("[fill] one-shot filler saved for %s", domain)
+        return _try_cached(domain, form_snapshot)
+
+    return None
+
+
+def _one_shot_fill(domain: str, form_snapshot: list[dict], ai: "AIClient") -> str | None:
+    """One-shot fallback: ask the LLM to return ONLY a JS function, no tools, no prose."""
+    fields_summary = "\n".join(
+        f"  - id={f.get('id')!r} name={f.get('name')!r} label={f.get('label')!r} type={f.get('type')!r}"
+        for f in form_snapshot[:20]
+    )
+    system = (
+        "You are a JavaScript code generator. "
+        "Output ONLY raw JavaScript — no explanation, no markdown, no prose. "
+        "Do not use code fences. Start your response with 'function fill(data) {' and end with '}'."
+    )
+    user = (
+        f"Write a JavaScript function that fills this ATS job application form on {domain}.\n\n"
+        f"Function signature: function fill(data) {{ ... }}\n"
+        f"Parameter: data = {{name, email, phone, cover_letter}} (all strings)\n\n"
+        f"Form fields:\n{fields_summary}\n\n"
+        f"Requirements:\n"
+        f"- Use document.querySelector or getElementById to find each field\n"
+        f"- Set .value and dispatch input + change events for React/Angular\n"
+        f"- Return {{filled: number, errors: string[]}}\n\n"
+        f"Output ONLY the JavaScript function. Start with: function fill(data) {{"
+    )
+    try:
+        raw = ai.generate(system, user).strip()
+        _log.debug("[fill] one-shot raw for %s: %r", domain, raw[:300])
+        # Strip any accidental fences the model adds
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        extracted = _extract_js_from_text(raw) or (raw if "function fill(" in raw else None)
+        if extracted:
+            validation = _validate_candidate(extracted, form_snapshot)
+            _log.info("[fill] one-shot validation for %s: %s", domain, validation)
+            if validation.get("valid"):
+                return extracted
+    except Exception as exc:
+        _log.warning("[fill] one-shot failed for %s: %s", domain, exc)
     return None
 
 

@@ -423,18 +423,24 @@ function GenerateTab({ settings, health }) {
         phone:        health?.profile?.phone || '',
         cover_letter: result?.cover_letter_md || '',
       };
-      const r = await sendMsg({
-        type: 'FILL_ATS',
-        domain: jobDomain,
-        formSnapshot,
-        fillData,
-        settings,
+
+      // Call /fill directly — bypasses the service worker to avoid MV3 idle timeout
+      // on long LLM calls (first-time filler generation can take ~2 min).
+      const headers = { 'Content-Type': 'application/json' };
+      if (settings?.companion_token) headers['X-Overhired-Token'] = settings.companion_token;
+      const resp = await fetch(`${settings?.companion_url || 'http://localhost:7878'}/fill`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ domain: jobDomain, form_snapshot: formSnapshot, fill_data: fillData }),
       });
-      if (r?.error) {
-        setErrMsg(r.error);
+      if (!resp.ok) {
+        const detail = await resp.json().catch(() => ({}));
+        setErrMsg(detail.detail || `Fill failed: ${resp.status}`);
         setFillState('error');
         return;
       }
+      const r = await resp.json();
+
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: (code, fillData) => {

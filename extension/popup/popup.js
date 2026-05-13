@@ -77,21 +77,23 @@ function FengShuiPanel() {
 }
 
 const STORAGE_KEYS = {
-  resume:    'resume_text',
-  profile:   'user_profile',
-  settings:  'settings',
+  settings: 'settings',
 };
 const DEFAULT_SETTINGS = {
-  provider:            '',               // empty = use companion's config.toml
-  endpoint:            '',
-  model:               '',
-  api_key:             '',
-  global_instructions: '',
-  easter_egg:          false,
-  easter_egg_text:     '',
-  companion_url:       'http://localhost:7878',
-  companion_token:     '',
+  companion_url:   'http://localhost:7878',
+  companion_token: '',
 };
+
+function sanitizeSettings(raw = {}) {
+  return {
+    companion_url: typeof raw.companion_url === 'string' && raw.companion_url.trim()
+      ? raw.companion_url
+      : DEFAULT_SETTINGS.companion_url,
+    companion_token: typeof raw.companion_token === 'string'
+      ? raw.companion_token
+      : DEFAULT_SETTINGS.companion_token,
+  };
+}
 
 // -- Utility -------------------------------------------------------------------
 
@@ -109,152 +111,12 @@ async function companionHealth(url = 'http://localhost:7878') {
 // Self-contained page scraper injected via chrome.scripting.executeScript.
 // Must NOT reference any outer variables - it is serialised and run in the page.
 function scrapeJobFromPage() {
-  const ATS_PATTERNS = [
-    { name: 'greenhouse',      pattern: /greenhouse\.io|boards\.greenhouse/i },
-    { name: 'ashby',           pattern: /ashbyhq\.com/i },
-    { name: 'workable',        pattern: /workable\.com/i },
-    { name: 'workday',         pattern: /myworkdayjobs\.com/i },
-    { name: 'lever',           pattern: /jobs\.lever\.co/i },
-    { name: 'linkedin',        pattern: /linkedin\.com\/jobs/i },
-    { name: 'smartrecruiters', pattern: /smartrecruiters\.com/i },
-    { name: 'icims',           pattern: /icims\.com/i },
-    { name: 'successfactors',  pattern: /successfactors\.com|successfactors\.eu|sapsf\.com/i },
-  ];
-
-  function detectATS() {
-    const url = window.location.href;
-    for (const { name, pattern } of ATS_PATTERNS) {
-      if (pattern.test(url)) return name;
-    }
-    return 'generic';
-  }
-
-  function meta(name) {
-    const el = document.querySelector(`meta[property="${name}"], meta[name="${name}"]`);
-    return el?.content?.trim() || '';
-  }
-
-  function stripHtml(html) {
-    const div = document.createElement('div');
-    div.innerHTML = html;
-    return div.textContent?.trim() || '';
-  }
-
-  function findDescBlock() {
-    const selectors = [
-      '[class*="job-description"]', '[class*="jobDescription"]',
-      '[class*="job_description"]', '[id*="job-description"]',
-      '[class*="posting-body"]',    '[class*="description"]',
-      '[class*="job-detail"]',      'article', 'main',
-    ];
-    for (const sel of selectors) {
-      const el = document.querySelector(sel);
-      if (el) {
-        const text = el.innerText?.trim();
-        if (text && text.length > 200) return text.slice(0, 6000);
-      }
-    }
-    return document.body?.innerText?.slice(0, 6000) || '';
-  }
-
-  const info = { title: '', company: '', location: '', description: '', ats: detectATS() };
-
-  // 1. LinkedIn: parse bpr-guid hidden JSON elements
-  if (/linkedin\.com\/jobs/i.test(window.location.href)) {
-    // Extract job ID from URL so we match only the currently displayed job.
-    // LinkedIn is a SPA: old bpr-guid elements stay in the DOM after navigation,
-    // so without this check the scraper returns the previous job's data.
-    const jobIdM = window.location.href.match(/(?:\/view\/|currentJobId=)(\d+)/);
-    const targetJobId = jobIdM ? jobIdM[1] : null;
-
-    const codeEls = document.querySelectorAll('code[id^="bpr-guid-"]');
-    for (const el of codeEls) {
-      try {
-        const parsed = JSON.parse(el.textContent);
-        for (const item of (parsed.included || [])) {
-          if (item.$type?.includes('jobs.JobPosting') && item.title) {
-            // Skip stale bpr-guid elements that belong to a different job
-            if (targetJobId && item.entityUrn && !item.entityUrn.includes(targetJobId)) continue;
-            if (!info.title) {
-              info.title = item.title;
-              if (item.companyDetails?.name) info.company = item.companyDetails.name;
-              if (item.description?.text)    info.description = item.description.text.slice(0, 6000);
-            }
-          }
-          if (!info.location && item.$type?.includes('.Geo') && item.defaultLocalizedName) {
-            info.location = item.defaultLocalizedName;
-          }
-          if (!info.company && item.$type?.includes('organization.Company') && item.name) {
-            info.company = item.name;
-          }
-        }
-        if (info.title) break;
-      } catch { /* skip malformed */ }
-    }
-    if (!info.description) {
-      const descEl = document.querySelector('#job-details, .jobs-description-content__text');
-      if (descEl) {
-        info.description = descEl.innerText.trim()
-          .replace(/\nSee how you compare[\s\S]*/i, '')
-          .replace(/\nCandidates who clicked apply[\s\S]*/i, '')
-          .trim().slice(0, 6000);
-      }
-    }
-  }
-
-  // 2. Seek: data-automation attributes are reliable and stable
-  if (!info.title && /seek\.co\.nz/i.test(window.location.href)) {
-    const titleEl    = document.querySelector('[data-automation="job-detail-title"]');
-    const companyEl  = document.querySelector('[data-automation="advertiser-name"]');
-    const descEl     = document.querySelector('[data-automation="jobAdDetails"]');
-    const locationEl = document.querySelector('[data-automation="job-detail-location"]');
-    if (titleEl)    info.title       = titleEl.innerText.trim();
-    if (companyEl)  info.company     = companyEl.innerText.trim().split('\n')[0].trim();
-    if (locationEl) info.location    = locationEl.innerText.trim();
-    if (descEl)     info.description = descEl.innerText.trim().slice(0, 6000);
-  }
-
-  // 3. JSON-LD structured data
-  if (!info.title) {
-    const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
-    for (const s of jsonLdScripts) {
-      try {
-        const data = JSON.parse(s.textContent);
-        const job = data['@type'] === 'JobPosting' ? data
-          : Array.isArray(data['@graph']) ? data['@graph'].find(x => x['@type'] === 'JobPosting')
-          : null;
-        if (job) {
-          info.title       = info.title       || job.title || '';
-          info.company     = info.company     || job.hiringOrganization?.name || '';
-          info.location    = info.location    || job.jobLocation?.address?.addressLocality || '';
-          info.description = info.description || stripHtml(job.description || '');
-        }
-      } catch { /* skip malformed */ }
-    }
-  }
-
-  // 4. OpenGraph / meta tags (og:site_name is the job board name, not the company - skip it)
-  if (!info.title) info.title = meta('og:title') || meta('twitter:title') || '';
-
-  // 5. Page title heuristic: "Role @ Company" or "Role | Company"
-  if (!info.title || !info.company) {
-    const pageTitle = document.title;
-    const sep = pageTitle.match(/(.+?)\s*[@|-]\s*(.+)/);
-    if (sep) {
-      if (!info.title)   info.title   = sep[1].trim();
-      if (!info.company) info.company = sep[2].replace(/\s*jobs?$/i, '').trim();
-    } else if (!info.title) {
-      info.title = pageTitle.trim();
-    }
-  }
-
-  // 6. Description fallback
-  if (!info.description) info.description = findDescBlock();
-
-  // Always include domain + page_text so the popup can fall back to /extract
-  info.domain    = window.location.hostname.replace(/^www\./, '');
+  const info = {
+    title: '', company: '', description: '', location: '', ats: 'generic',
+    domain: '', page_text: '',
+  };
+  info.domain = window.location.hostname.replace(/^www\./, '');
   info.page_text = (document.body?.innerText || '').slice(0, 12000);
-
   return info;
 }
 
@@ -286,11 +148,40 @@ function CompanionBanner({ health }) {
     </div>`;
 }
 
+function ListPageBanner({ url }) {
+  const isListPage =
+    /linkedin\.com\/jobs\/(collections|search)/i.test(url) ||
+    /seek\.co\.nz\/jobs[\/?]/i.test(url) ||
+    /indeed\.com\/jobs[\/?]/i.test(url) ||
+    /linkedin\.com\/jobs\/?$/i.test(url);
+  if (!isListPage) return null;
+  return html`
+    <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#856404;">
+      📋 <strong>List page detected</strong> — open a specific job posting, then scan again.
+    </div>`;
+}
+
+function FileStatusBar({ status }) {
+  if (!status) return null;
+  const files = [
+    { key: 'cover_letter', label: 'Cover letter' },
+    { key: 'summary',      label: 'Summary' },
+    { key: 'score',        label: 'Score' },
+    { key: 'insight',      label: 'Insights' },
+  ];
+  return html`
+    <div style="margin-top:8px;font-size:11px;color:#555;">
+      ${files.map(f => html`
+        <span style="margin-right:8px;">
+          ${status[f.key] ? '✅' : '⏳'} ${f.label}
+        </span>`)}
+    </div>`;
+}
 
 // -- Generate tab --------------------------------------------------------------
 
-function GenerateTab({ settings, resumeLoaded }) {
-  const [scanState,  setScanState]  = useState('idle'); // idle | scanning | found
+function GenerateTab({ settings }) {
+  const [scanState,  setScanState]  = useState('idle'); // idle | scanning | learning | found
   const [title,      setTitle]      = useState('');
   const [company,    setCompany]    = useState('');
   const [desc,       setDesc]       = useState('');
@@ -304,18 +195,40 @@ function GenerateTab({ settings, resumeLoaded }) {
   const [errMsg,     setErrMsg]     = useState('');
   const [savedPaths, setSavedPaths] = useState(null);
   const [tabUrl,     setTabUrl]     = useState('');
+  const [jobId,      setJobId]      = useState(null);
+  const [fileStatus, setFileStatus] = useState(null);
 
   useEffect(() => {
     chrome.tabs.query({ active: true, currentWindow: true })
       .then(([tab]) => setTabUrl(tab?.url || ''));
   }, []);
 
-  const isListView =
-    /linkedin\.com\/jobs\/(collections|search)/i.test(tabUrl) ||
-    /seek\.co\.nz\/jobs[\/?]/i.test(tabUrl) ||
-    /indeed\.com\/jobs[\/?]/i.test(tabUrl);
+  useEffect(() => {
+    if (!jobId) return;
+    let active = true;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 120;
+    const poll = async () => {
+      if (!active || attempts >= MAX_ATTEMPTS) return;
+      attempts++;
+      try {
+        const r = await sendMsg({ type: 'POLL_FILES', jobId, settings });
+        if (r && !r.error) {
+          setFileStatus(r);
+          const allDone = r.cover_letter && r.summary && r.score && r.insight;
+          if (!allDone) setTimeout(poll, 5000);
+        } else {
+          setTimeout(poll, 5000);
+        }
+      } catch {
+        setTimeout(poll, 5000);
+      }
+    };
+    poll();
+    return () => { active = false; };
+  }, [jobId, settings]);
 
-  const canGenerate = resumeLoaded && status !== 'loading';
+  const canGenerate = status !== 'loading';
 
   const scanPage = useCallback(async () => {
     setScanState('scanning');
@@ -323,7 +236,6 @@ function GenerateTab({ settings, resumeLoaded }) {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab?.id) throw new Error('No active tab found.');
-      // executeScript injects fresh code on every click - no stale content script connection
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: scrapeJobFromPage,
@@ -331,32 +243,20 @@ function GenerateTab({ settings, resumeLoaded }) {
       const j = results[0]?.result;
 
       if (j?.title) {
-        // Fast path: JS extractor succeeded (LinkedIn, Seek, JSON-LD, etc.)
-        setTitle(j.title       || '');
-        setCompany(j.company   || '');
-        setDesc(j.description  || '');
-        setJobDomain(j.domain  || '');
-        setAts(j.ats           || 'generic');
+        setTitle(j.title || '');
+        setCompany(j.company || '');
+        setDesc(j.description || '');
+        setJobDomain(j.domain || '');
+        setAts(j.ats || 'generic');
         setScanState('found');
         return;
       }
 
-      // Slow path: unknown site — ask companion to learn it via /extract
-      const url = tab.url || '';
-      const isListView =
-        /linkedin\.com\/jobs\/(collections|search)/i.test(url) ||
-        /seek\.co\.nz\/jobs[\/?]/i.test(url) ||
-        /indeed\.com\/jobs[\/?]/i.test(url);
-      if (isListView) {
-        setScanError('No job found - you are on a list/search page. Open the specific job in a new tab, then scan again.');
-        setScanState('idle');
-        return;
-      }
-
       setScanState('learning');
+      const url = tab.url || '';
       const resp = await sendMsg({
-        type:      'EXTRACT',
-        domain:    j?.domain    || new URL(url).hostname.replace(/^www\./, ''),
+        type: 'EXTRACT',
+        domain: j?.domain || new URL(url).hostname.replace(/^www\./, ''),
         page_text: j?.page_text || '',
         settings,
       });
@@ -366,9 +266,9 @@ function GenerateTab({ settings, resumeLoaded }) {
         setScanState('idle');
         return;
       }
-      setTitle(resp.title       || '');
-      setCompany(resp.company   || '');
-      setDesc(resp.description  || '');
+      setTitle(resp.title || '');
+      setCompany(resp.company || '');
+      setDesc(resp.description || '');
       setJobDomain(new URL(url).hostname.replace(/^www\./, ''));
       setAts('generic');
       setScanState('found');
@@ -381,9 +281,16 @@ function GenerateTab({ settings, resumeLoaded }) {
   const reset = useCallback(() => {
     setScanState('idle');
     setScanError('');
-    setTitle(''); setCompany(''); setDesc(''); setJobDomain('');
-    setResult(null); setSavedPaths(null);
-    setStatus('idle'); setErrMsg('');
+    setTitle('');
+    setCompany('');
+    setDesc('');
+    setJobDomain('');
+    setResult(null);
+    setSavedPaths(null);
+    setStatus('idle');
+    setErrMsg('');
+    setJobId(null);
+    setFileStatus(null);
   }, []);
 
   const generate = useCallback(async () => {
@@ -391,10 +298,12 @@ function GenerateTab({ settings, resumeLoaded }) {
     setErrMsg('');
     setResult(null);
     setSavedPaths(null);
+    setJobId(null);
+    setFileStatus(null);
     try {
       const resp = await sendMsg({
         type: 'GENERATE',
-        job:  { title, company, description: desc, ats },
+        job: { title, company, description: desc, ats },
         perJobInstructions: perJob,
         settings,
       });
@@ -403,15 +312,18 @@ function GenerateTab({ settings, resumeLoaded }) {
       setStatus('done');
       sendMsg({
         type: 'SAVE',
-        company, role: title,
-        coverMd:        resp.cover_letter_md,
-        coverHtml:      resp.cover_letter_html,
-        domain:         jobDomain,
+        company,
+        role: title,
+        coverMd: resp.cover_letter_md,
+        coverHtml: resp.cover_letter_html,
+        domain: jobDomain,
         jobDescription: desc,
-        resumeText:     settings.resume_text || '',
+        resumeText: '',
         settings,
-      }).then(r => { if (r?.md_path) setSavedPaths(r); })
-        .catch(err => console.warn('[overhired] Auto-save failed:', err.message));
+      }).then(r => {
+        if (r?.md_path) setSavedPaths(r);
+        if (r?.job_id) setJobId(r.job_id);
+      }).catch(err => console.warn('[overhired] Auto-save failed:', err.message));
     } catch (e) {
       setErrMsg(e.message);
       setStatus('error');
@@ -436,10 +348,10 @@ function GenerateTab({ settings, resumeLoaded }) {
     }
   }, [result]);
 
-  // -- Scan state --
   if (scanState !== 'found') return html`
     <div class="panel">
       <${FengShuiPanel} />
+      ${ListPageBanner({ url: tabUrl })}
       <button class="btn btn-primary btn-full" style="margin-bottom:8px"
         disabled=${scanState === 'scanning' || scanState === 'learning'} onClick=${scanPage}>
         ${scanState === 'scanning'
@@ -450,24 +362,16 @@ function GenerateTab({ settings, resumeLoaded }) {
       </button>
       ${scanState === 'learning' && html`
         <p style="color:var(--muted);font-size:11px;margin-top:0">
-          This site hasn't been seen before. The companion is generating a parser — this takes ~30s once, then it's instant.
+          This site hasn't been seen before. The companion is generating a parser - this takes ~30s once, then it's instant.
         </p>`}
       ${scanError && html`
         <p style="color:var(--muted);font-size:11px;margin-top:0">${scanError}</p>`}
-      ${isListView && html`
-        <p style="background:#3a300a;color:#f5c842;font-size:11px;margin-top:4px;padding:6px 8px;border-radius:6px;border-left:3px solid #f5c842">
-          You are on a search/list page. Open the specific job in its own tab for reliable scanning.
-        </p>`}
-      ${!resumeLoaded && html`
-        <p style="color:var(--muted);font-size:11px;margin-top:6px">
-          No resume loaded - upload your PDF in Settings first.
-        </p>`}
     </div>`;
 
-  // -- Found state --
   return html`
     <div class="panel">
       <${FengShuiPanel} />
+      ${ListPageBanner({ url: tabUrl })}
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
         <div class="field" style="margin-bottom:0">
@@ -510,16 +414,12 @@ function GenerateTab({ settings, resumeLoaded }) {
           onClick=${reset}>Scan another page</button>
       </div>
 
-      ${!resumeLoaded && html`
-        <p style="color:var(--muted);font-size:11px;margin-top:8px">
-          No resume loaded - go to Settings to upload your PDF.
-        </p>`}
-
       ${status === 'error' && html`
         <p style="color:var(--danger);font-size:11px;margin-top:8px">${errMsg}</p>`}
 
       ${savedPaths && html`
         <div class="saved-path">Saved: ${savedPaths.md_path}</div>`}
+      ${FileStatusBar({ status: fileStatus })}
 
       ${result && html`
         <div class="preview" dangerouslySetInnerHTML=${{
@@ -528,204 +428,31 @@ function GenerateTab({ settings, resumeLoaded }) {
     </div>`;
 }
 
-// -- Parser Cache section (inside Settings) ------------------------------------
-
-function ParserCacheSection({ settings }) {
-  const [domain,  setDomain]  = useState('');
-  const [status,  setStatus]  = useState(''); // '' | 'ok' | 'error'
-  const [message, setMessage] = useState('');
-
-  useEffect(() => {
-    chrome.tabs.query({ active: true, currentWindow: true })
-      .then(([tab]) => {
-        if (tab?.url) {
-          try { setDomain(new URL(tab.url).hostname.replace(/^www\./, '')); }
-          catch { /* non-URL tab */ }
-        }
-      });
-  }, []);
-
-  const regenerate = useCallback(async () => {
-    if (!domain) return;
-    setStatus('');
-    setMessage('');
-    try {
-      const resp = await sendMsg({ type: 'DELETE_PARSER', domain, settings });
-      if (resp?.error) { setStatus('error'); setMessage(resp.error); }
-      else { setStatus('ok'); setMessage(`Parser for ${domain} deleted — will regenerate on next scan.`); }
-    } catch (e) {
-      setStatus('error'); setMessage(e.message || 'Failed');
-    }
-  }, [domain, settings]);
-
-  return html`
-    <div class="settings-section">
-      <div class="settings-title">Parser Cache</div>
-      <p style="font-size:11px;color:var(--muted);margin-bottom:6px">
-        The companion caches a site-specific parser after the first scan of each job board.
-        If a site changes its layout, delete the cached parser to force regeneration.
-      </p>
-      <div style="display:flex;gap:8px;align-items:center">
-        <input type="text" value=${domain}
-          onInput=${e => setDomain(e.target.value)}
-          placeholder="Domain, e.g. example.com"
-          style="flex:1;font-size:12px" />
-        <button class="btn btn-secondary" style="white-space:nowrap" onClick=${regenerate}
-          disabled=${!domain}>
-          Regenerate
-        </button>
-      </div>
-      ${message && html`
-        <p style="font-size:11px;margin-top:4px;color:${status === 'ok' ? '#4caf7d' : 'var(--muted)'}">
-          ${message}
-        </p>`}
-    </div>`;
-}
-
 // -- Settings tab --------------------------------------------------------------
 
-function SettingsTab({ settings, onSave, onResumeLoaded }) {
-  const [s,       setS]       = useState(settings);
-  const [profile, setProfile] = useState({});
-  const [resume,  setResume]  = useState('');  // extracted text
-  const [rStatus, setRStatus] = useState('');  // 'loaded' | 'loading' | ''
-  const [drag,    setDrag]    = useState(false);
-  const [saved,   setSaved]   = useState(false);
+function SettingsTab({ settings, onSave }) {
+  const [s, setS] = useState(settings);
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    load([STORAGE_KEYS.profile, STORAGE_KEYS.resume]).then(d => {
-      if (d.user_profile) setProfile(d.user_profile);
-      if (d.resume_text)  setRStatus('loaded');
-    });
-  }, []);
+    setS(settings);
+  }, [settings]);
 
-  const field = (key, subkey) => ({
-    value:   subkey ? s[key]?.[subkey] ?? '' : s[key] ?? '',
-    onInput: e => setS(prev => subkey
-      ? { ...prev, [key]: { ...prev[key], [subkey]: e.target.value } }
-      : { ...prev, [key]: e.target.value }),
+  const field = (key) => ({
+    value: s[key] ?? '',
+    onInput: e => setS(prev => ({ ...prev, [key]: e.target.value })),
   });
-
-  const profileField = (key) => ({
-    value:   profile[key] || '',
-    onInput: e => setProfile(prev => ({ ...prev, [key]: e.target.value })),
-  });
-
-  const openUploadTab = useCallback(() => {
-    chrome.tabs.create({ url: chrome.runtime.getURL('popup/popup.html') + '?tab=settings' });
-  }, []);
-
-  const handlePdf = useCallback(async (file) => {
-    if (!file || !file.name.endsWith('.pdf')) return;
-    setRStatus('loading');
-    try {
-      const resumeText = await parsePdfLocally(file);
-      await store({ [STORAGE_KEYS.resume]: resumeText });
-
-      // Auto-fill profile fields that are still empty
-      const detected = extractProfileFromResume(resumeText);
-      setProfile(prev => {
-        const merged = { ...prev };
-        for (const [k, v] of Object.entries(detected)) {
-          if (!merged[k] && v) merged[k] = v;
-        }
-        store({ [STORAGE_KEYS.profile]: merged });
-        return merged;
-      });
-
-      setRStatus('loaded');
-      onResumeLoaded?.(true);
-    } catch (e) {
-      setRStatus('error: ' + e.message);
-    }
-  }, [onResumeLoaded]);
 
   const saveAll = async () => {
-    await store({ [STORAGE_KEYS.settings]: s, [STORAGE_KEYS.profile]: profile });
-    onSave(s);
+    const next = sanitizeSettings(s);
+    await store({ [STORAGE_KEYS.settings]: next });
+    onSave(next);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
 
-  const dropZoneClass = `drop-zone ${drag ? 'drag' : ''} ${rStatus === 'loaded' ? 'loaded' : ''}`;
-
   return html`
     <div class="panel">
-
-      <!-- Resume -->
-      <div class="settings-section">
-        <div class="settings-title">Resume (PDF)</div>
-        <div
-          class=${dropZoneClass}
-          onDragOver=${e => { e.preventDefault(); setDrag(true); }}
-          onDragLeave=${() => setDrag(false)}
-          onDrop=${e => { e.preventDefault(); setDrag(false); handlePdf(e.dataTransfer.files[0]); }}
-          onClick=${() => IN_FULL_TAB
-            ? document.getElementById('pdf-input').click()
-            : openUploadTab()}
-        >
-          ${rStatus === 'loaded'  ? (IN_FULL_TAB ? 'Resume loaded - profile fields auto-filled below' : 'Resume loaded - click to update') :
-            rStatus === 'loading' ? 'Parsing PDF...' :
-            rStatus.startsWith('error') ? `${rStatus}` :
-            IN_FULL_TAB ? 'Drop your resume PDF here or click to select'
-                        : 'Click to open upload page'}
-        </div>
-        <input id="pdf-input" type="file" accept=".pdf" style="display:none"
-          onChange=${e => handlePdf(e.target.files[0])} />
-      </div>
-
-      <!-- Personal profile -->
-      <div class="settings-section">
-        <div class="settings-title">Your Profile</div>
-        ${['name','email','phone','linkedin','github'].map(k => html`
-          <div class="field">
-            <label>${k.charAt(0).toUpperCase() + k.slice(1)}</label>
-            <input type=${k === 'email' ? 'email' : 'text'} ...${profileField(k)} />
-          </div>`)}
-        <div class="field">
-          <label>Address (Street)</label>
-          <input type="text" ...${profileField('address_street')} />
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-          ${[['City','address_city'],['State / Province','address_state'],
-             ['Postal Code','address_postal'],['Country','address_country']].map(([lbl,k]) => html`
-            <div class="field">
-              <label>${lbl}</label>
-              <input type="text" ...${profileField(k)} />
-            </div>`)}
-        </div>
-      </div>
-
-      <!-- AI provider -->
-      <div class="settings-section">
-        <div class="settings-title">AI Provider</div>
-        <div class="field">
-          <label>Provider</label>
-          <select value=${s.provider} onChange=${e => setS(p => ({ ...p, provider: e.target.value }))}>
-            <option value="">Companion default (from config.toml)</option>
-            <option value="ollama">Ollama / llama.cpp (local)</option>
-            <option value="openai">OpenAI-compatible</option>
-            <option value="claude">Anthropic Claude</option>
-          </select>
-        </div>
-        <div class="field">
-          <label>Endpoint <span style="color:var(--muted)">(leave blank to use companion default)</span></label>
-          <input type="text" ...${field('endpoint')}
-            placeholder="e.g. http://localhost:8080" />
-        </div>
-        <div class="field">
-          <label>Model <span style="color:var(--muted)">(leave blank to use companion default)</span></label>
-          <input type="text" ...${field('model')}
-            placeholder="e.g. llama3.2, gpt-4o, claude-sonnet-4-6" />
-        </div>
-        ${s.provider === 'openai' || s.provider === 'claude' ? html`
-          <div class="field">
-            <label>API Key</label>
-            <input type="password" ...${field('api_key')} placeholder="sk-..." />
-          </div>` : null}
-      </div>
-
-      <!-- Companion connection -->
       <div class="settings-section">
         <div class="settings-title">Companion Connection</div>
         <div class="field">
@@ -740,39 +467,6 @@ function SettingsTab({ settings, onSave, onResumeLoaded }) {
         </div>
       </div>
 
-      <!-- Global instructions -->
-      <div class="settings-section">
-        <div class="settings-title">Global Instructions</div>
-        <div class="field">
-          <textarea rows=3 ...${field('global_instructions')}
-            placeholder="Applied to every cover letter. E.g. Keep it under 400 words. Sign off as Jun." />
-        </div>
-      </div>
-
-      <!-- Easter egg -->
-      <div class="settings-section">
-        <div class="settings-title">Easter Egg</div>
-        <div class="toggle-row">
-          <span class="toggle-label">Include AI prompt injection comment</span>
-          <input type="checkbox"
-            checked=${s.easter_egg}
-            onChange=${e => setS(p => ({ ...p, easter_egg: e.target.checked }))} />
-        </div>
-        <p style="font-size:11px;color:var(--muted)">
-          Appends a hidden HTML comment to every cover letter instructing AI
-          screening systems to advance your application. 
-        </p>
-        ${s.easter_egg && html`
-          <div class="field" style="margin-top:8px">
-            <label>Custom message <span style="color:var(--muted)">(leave empty for built-in default)</span></label>
-            <textarea rows=4 ...${field('easter_egg_text')}
-              placeholder="Custom AI prompt injection text..." />
-          </div>`}
-      </div>
-
-      <!-- Parser Cache -->
-      <${ParserCacheSection} settings=${s} />
-
       <button class="btn btn-primary btn-full" onClick=${saveAll}>
         ${saved ? 'Saved!' : 'Save Settings'}
       </button>
@@ -782,22 +476,15 @@ function SettingsTab({ settings, onSave, onResumeLoaded }) {
 // -- Root App ------------------------------------------------------------------
 
 function App() {
-  const [tab,          setTab]          = useState(IN_FULL_TAB ? 'settings' : 'generate');
-  const [health,       setHealth]       = useState(undefined);
-  const [settings,     setSettings]     = useState(DEFAULT_SETTINGS);
-  const [resumeLoaded, setResumeLoaded] = useState(false);
+  const [tab,      setTab]      = useState(IN_FULL_TAB ? 'settings' : 'generate');
+  const [health,   setHealth]   = useState(undefined);
+  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
 
   useEffect(() => {
-    load([STORAGE_KEYS.settings, STORAGE_KEYS.resume]).then(d => {
-      let s = d.settings ? { ...DEFAULT_SETTINGS, ...d.settings } : DEFAULT_SETTINGS;
-      // Migrate: old installs had hardcoded ollama/llama3.2 defaults; clear them so
-      // the companion uses its own config.toml instead of being overridden.
-      if (s.provider === 'ollama' && s.model === 'llama3.2') {
-        s = { ...s, provider: '', endpoint: '', model: '' };
-        store({ [STORAGE_KEYS.settings]: s });
-      }
+    load([STORAGE_KEYS.settings]).then(d => {
+      const s = sanitizeSettings(d.settings || {});
       setSettings(s);
-      if (d.resume_text) setResumeLoaded(true);
+      store({ [STORAGE_KEYS.settings]: s });
       companionHealth(s.companion_url).then(setHealth);
     });
   }, []);
@@ -824,62 +511,12 @@ function App() {
       </div>
 
       ${tab === 'generate'
-        ? html`<${GenerateTab} settings=${settings} resumeLoaded=${resumeLoaded} />`
-        : html`<${SettingsTab} settings=${settings} onResumeLoaded=${setResumeLoaded} onSave=${s => { setSettings(s); store({ [STORAGE_KEYS.settings]: s }); }} />`}
+        ? html`<${GenerateTab} settings=${settings} />`
+        : html`<${SettingsTab} settings=${settings} onSave=${s => {
+            setSettings(s);
+            companionHealth(s.companion_url).then(setHealth);
+          }} />`}
     </div>`;
-}
-
-// -- Helpers -------------------------------------------------------------------
-
-function extractProfileFromResume(text) {
-  const out = {};
-
-  const emailM = text.match(/\b([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})\b/);
-  if (emailM) out.email = emailM[1];
-
-  // International: +64 204 770601, +1-800-555-0100, etc. then local fallback
-  const phoneM = text.match(/\+\d{1,3}[\s\-.]?\(?\d{1,4}\)?[\s\-.]?\d{6,10}/)
-              || text.match(/\b\(?\d{2,4}\)?[\s.\-]?\d{3,4}[\s.\-]?\d{4}\b/);
-  if (phoneM) out.phone = phoneM[0].trim();
-
-  // Full URL (linkedin.com/in/user) or short form (in/user) preceded by whitespace
-  const liM = text.match(/linkedin\.com\/in\/([\w\-]+)/i)
-           || text.match(/(?:^|\s)in\/([\w\-]+)/m);
-  if (liM) out.linkedin = `https://linkedin.com/in/${liM[1]}`;
-
-  const ghM = text.match(/github\.com\/([\w\-]+)/i);
-  if (ghM) out.github = `https://github.com/${ghM[1]}`;
-
-  // Name heuristic: first short line (2-4 Title-case words, no digits)
-  for (const line of text.split('\n').map(l => l.trim()).slice(0, 8)) {
-    if (/^[A-Z][a-zA-Z'\-]+(?: [A-Z][a-zA-Z'\-]+){1,3}$/.test(line)) {
-      out.name = line;
-      break;
-    }
-  }
-
-  return out;
-}
-
-async function parsePdfLocally(file) {
-  const wasmUrl = chrome.runtime.getURL('wasm/mupdf.js');
-  const mupdf   = await import(wasmUrl); // named exports, WASM init via top-level await
-
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const doc   = mupdf.Document.openDocument(bytes, 'application/pdf');
-  const pages = doc.countPages();
-  const parts = [];
-
-  for (let i = 0; i < pages; i++) {
-    const page = doc.loadPage(i);
-    try   { parts.push(page.toStructuredText('preserve-whitespace').asText()); }
-    finally { page.destroy(); }
-  }
-  doc.destroy();
-
-  const text = parts.join('\n\n').trim();
-  if (!text) throw new Error('Could not extract text from PDF (may be image-only).');
-  return text;
 }
 
 // -- Mount ---------------------------------------------------------------------

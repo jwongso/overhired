@@ -26,6 +26,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   switch (msg.type) {
     case 'GENERATE':      handleGenerate(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));      break;
     case 'SAVE':          handleSave(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));           break;
+    case 'POLL_FILES':    handlePollFiles(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));      break;
     case 'PARSE_PDF':     handleParsePdf(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));      break;
     case 'EXTRACT':       handleExtract(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));       break;
     case 'DELETE_PARSER': handleDeleteParser(msg).then(sendResponse).catch(err => sendResponse({ error: err.message })); break;
@@ -39,28 +40,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 async function handleGenerate(msg) {
   const { job, perJobInstructions, settings } = msg;
 
-  // Load resume + profile from storage
-  const stored = await chrome.storage.local.get(['resume_text', 'user_profile']);
-  const resumeText  = stored.resume_text  || '';
-  const userProfile = stored.user_profile || {};
-
-  if (!resumeText) throw new Error('No resume found. Please upload your PDF in Settings.');
-
   const body = {
-    job_title:            job?.title        || 'Unknown Role',
-    company:              job?.company      || 'Unknown Company',
-    job_description:      job?.description  || '',
-    resume_text:          resumeText,
-    user_profile:         userProfile,
-    global_instructions:  settings?.global_instructions || '',
+    job_title:            job?.title       || 'Unknown Role',
+    company:              job?.company     || 'Unknown Company',
+    job_description:      job?.description || '',
+    resume_text:          '',
     per_job_instructions: perJobInstructions || '',
-    easter_egg:           settings?.easter_egg      || false,
-    easter_egg_text:      settings?.easter_egg_text || null,
-    // Forward extension AI settings to companion so the UI controls generation.
-    ai_provider:          settings?.provider  || null,
-    ai_endpoint:          settings?.endpoint  || null,
-    ai_model:             settings?.model     || null,
-    ai_key:               settings?.api_key   || null,
   };
 
   const resp = await fetch(`${companionUrl(settings)}/generate`, {
@@ -97,6 +82,18 @@ async function handleSave(msg) {
   if (!resp.ok) {
     const detail = await resp.json().catch(() => ({}));
     throw new Error(detail.detail || `Save failed: ${resp.status}`);
+  }
+  return resp.json();
+}
+
+async function handlePollFiles(msg) {
+  const { jobId, settings } = msg;
+  const resp = await fetch(`${companionUrl(settings)}/jobs/${encodeURIComponent(jobId)}/files`, {
+    headers: companionHeaders(settings),
+  });
+  if (!resp.ok) {
+    const detail = await resp.json().catch(() => ({}));
+    throw new Error(detail.detail || `Poll failed: ${resp.status}`);
   }
   return resp.json();
 }

@@ -35,6 +35,8 @@ class TestSaveEndpoint:
         data = resp.json()
         md_path = Path(data["md_path"])
         html_path = Path(data["html_path"])
+        assert data["job_id"]
+        assert len(data["job_id"]) == 12
         assert md_path.exists()
         assert html_path.exists()
         assert not (md_path.parent / "summary.md").exists()
@@ -56,9 +58,35 @@ class TestSaveEndpoint:
         data = resp.json()
         assert data["md_path"].endswith("cover_letter.md")
         assert data["html_path"].endswith("cover_letter.html")
+        assert data["job_id"]
         insight.assert_called_once()
         score.assert_called_once()
         summary.assert_called_once()
+
+    def test_job_files_found(self, client):
+        resp = client.post("/save", json={
+            "company": "Acme",
+            "role": "Engineer",
+            "cover_letter_md": "# Hello",
+            "cover_letter_html": "<p>Hello</p>",
+        })
+        assert resp.status_code == 200
+        job_id = resp.json()["job_id"]
+
+        files_resp = client.get(f"/jobs/{job_id}/files")
+        assert files_resp.status_code == 200
+        assert files_resp.json() == {
+            "job_id": job_id,
+            "cover_letter": True,
+            "summary": False,
+            "score": False,
+            "insight": False,
+        }
+
+    def test_job_files_not_found(self, client):
+        resp = client.get("/jobs/doesnotexist/files")
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "job_id 'doesnotexist' not found"
 
 
 class TestBackgroundWriters:

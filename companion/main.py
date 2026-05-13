@@ -18,6 +18,7 @@ Endpoints:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html as _html
 import logging
 import re
@@ -81,7 +82,7 @@ class GenerateRequest(BaseModel):
     job_title:            str
     company:              str
     job_description:      str
-    resume_text:          str
+    resume_text:          str = ""
     user_profile:         dict          = Field(default_factory=dict)
     global_instructions:  str           = ""
     per_job_instructions: str           = ""
@@ -116,6 +117,7 @@ class SaveRequest(BaseModel):
 class SaveResponse(BaseModel):
     md_path:   str
     html_path: str
+    job_id:    str
 
 
 def _format_summary(data: dict, company: str, domain: str) -> str:
@@ -219,28 +221,32 @@ def _format_insight(data: dict, role: str, company: str) -> str:
 
 
 def _bg_write_summary(dest: Path, domain: str, company: str) -> None:
+    logger.info("[analysis] summary.md starting — fetching %s", domain)
     try:
         data = analyzer_module.research_company(domain, company, AI)
         (dest / "summary.md").write_text(_format_summary(data, company, domain), encoding="utf-8")
-        logger.info("[analysis] summary.md written for %s", company)
+        logger.info("[analysis] summary.md done for %s", company)
     except Exception as exc:
         logger.warning("[analysis] summary.md failed: %s", exc)
 
 
 def _bg_write_score(dest: Path, job_description: str, resume_text: str, role: str, company: str) -> None:
+    logger.info("[analysis] score.md starting for %s @ %s", role, company)
     try:
         data = analyzer_module.score_job_fit(job_description, resume_text, AI)
         (dest / "score.md").write_text(_format_score(data, role, company), encoding="utf-8")
-        logger.info("[analysis] score.md written for %s @ %s", role, company)
+        logger.info("[analysis] score.md done — score=%s recommendation=%s", data.get("score"), data.get("recommendation"))
     except Exception as exc:
         logger.warning("[analysis] score.md failed: %s", exc)
 
 
 def _bg_write_insight(dest: Path, job_description: str, role: str, company: str) -> None:
+    logger.info("[analysis] insight.md starting for %s @ %s", role, company)
     try:
         data = analyzer_module.decode_jargon(job_description, AI)
         (dest / "insight.md").write_text(_format_insight(data, role, company), encoding="utf-8")
-        logger.info("[analysis] insight.md written for %s @ %s", role, company)
+        logger.info("[analysis] insight.md done — verdict=%s red_flags=%d",
+                    data.get("verdict"), len(data.get("red_flags", [])))
     except Exception as exc:
         logger.warning("[analysis] insight.md failed: %s", exc)
 
@@ -261,9 +267,6 @@ def health():
 
 @app.post("/generate", response_model=GenerateResponse)
 def generate(req: GenerateRequest, _: None = Depends(_require_token)):
-    system_prompt = _build_system_prompt()
-    user_prompt   = _build_user_prompt(req)
-
     # Build a per-request AIClient when the extension overrides provider/model/
     # endpoint/key; otherwise reuse the global client to avoid the overhead of
     # constructing a new one on every request.
@@ -276,9 +279,20 @@ def generate(req: GenerateRequest, _: None = Depends(_require_token)):
         if req.ai_key:      override["api_key"]  = req.ai_key
         ai = ai_module.AIClient(override)
 
+    if not req.resume_text:
+        req = req.model_copy(update={"resume_text": cfg_module.load_resume_text(CFG)})
+
+    logger.info("[generate] %s @ %s | resume=%d chars | jd=%d chars",
+                req.job_title, req.company, len(req.resume_text), len(req.job_description))
+    system_prompt = _build_system_prompt()
+    user_prompt   = _build_user_prompt(req)
+
     try:
+        logger.info("[generate] calling AI (%s %s)...", CFG['ai']['provider'], CFG['ai']['model'])
         raw = ai.generate(system_prompt, user_prompt)
+        logger.info("[generate] AI done — response %d chars", len(raw))
     except ai_module.AIError as exc:
+        logger.error("[generate] AI error: %s", exc)
         raise HTTPException(status_code=502, detail=str(exc))
 
     # Normalise - some models wrap output in markdown fences
@@ -311,15 +325,56 @@ def save(req: SaveRequest, background_tasks: BackgroundTasks, _: None = Depends(
 
     md_path.write_text(req.cover_letter_md, encoding="utf-8")
     html_path.write_text(req.cover_letter_html, encoding="utf-8")
+    logger.info("[save] cover_letter written → %s", dest)
+
+    resume_text = req.resume_text or cfg_module.load_resume_text(CFG)
 
     if req.job_description:
+        logger.info("[save] queuing insight.md background task")
         background_tasks.add_task(_bg_write_insight, dest, req.job_description, req.role, req.company)
-        if req.resume_text:
-            background_tasks.add_task(_bg_write_score, dest, req.job_description, req.resume_text, req.role, req.company)
+        if resume_text:
+            logger.info("[save] queuing score.md background task")
+            background_tasks.add_task(_bg_write_score, dest, req.job_description, resume_text, req.role, req.company)
+        else:
+            logger.info("[save] no resume_text — skipping score.md")
     if req.domain:
+        logger.info("[save] queuing summary.md background task (domain=%s)", req.domain)
         background_tasks.add_task(_bg_write_summary, dest, req.domain, req.company)
+    else:
+        logger.info("[save] no domain — skipping summary.md")
 
-    return SaveResponse(md_path=str(md_path), html_path=str(html_path))
+    job_id = hashlib.md5(str(dest).encode()).hexdigest()[:12]
+    return SaveResponse(md_path=str(md_path), html_path=str(html_path), job_id=job_id)
+
+
+# ── /jobs/{job_id}/files ──────────────────────────────────────────────────────
+
+@app.get("/jobs/{job_id}/files")
+def job_files(job_id: str, _: None = Depends(_require_token)):
+    """Poll which analysis files have been written for a given job_id."""
+    out_root = Path(CFG["output_dir"]).expanduser()
+    dest: Path | None = None
+    if out_root.exists():
+        for company_dir in out_root.iterdir():
+            if not company_dir.is_dir():
+                continue
+            for role_dir in company_dir.iterdir():
+                if not role_dir.is_dir():
+                    continue
+                if hashlib.md5(str(role_dir).encode()).hexdigest()[:12] == job_id:
+                    dest = role_dir
+                    break
+            if dest:
+                break
+    if dest is None:
+        raise HTTPException(status_code=404, detail=f"job_id {job_id!r} not found")
+    return {
+        "job_id": job_id,
+        "cover_letter": (dest / "cover_letter.md").exists(),
+        "summary": (dest / "summary.md").exists(),
+        "score": (dest / "score.md").exists(),
+        "insight": (dest / "insight.md").exists(),
+    }
 
 
 # ── /extract ──────────────────────────────────────────────────────────────────
@@ -339,7 +394,9 @@ class ExtractResponse(BaseModel):
 @app.post("/extract", response_model=ExtractResponse)
 def extract_job(req: ExtractRequest, _: None = Depends(_require_token)):
     import extractor
+    logger.info("[extract] domain=%s page_text=%d chars", req.domain, len(req.page_text))
     result = extractor.extract(req.domain, req.page_text, AI)
+    logger.info("[extract] result: title=%r company=%r", result.get("title",""), result.get("company",""))
     return ExtractResponse(**result)
 
 
@@ -513,15 +570,23 @@ def _safe_name(name: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="overhired-companion")
-    parser.add_argument("--port", type=int, default=CFG.get("companion_port", 7878))
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--reload", action="store_true", help="Dev mode auto-reload")
+    parser.add_argument("--port",      type=int, default=CFG.get("companion_port", 7878))
+    parser.add_argument("--host",      default="127.0.0.1")
+    parser.add_argument("--reload",    action="store_true", help="Dev mode auto-reload")
+    parser.add_argument("--log-level", default="info",
+                        choices=["debug", "info", "warning", "error"],
+                        help="Log verbosity (default: info)")
     args = parser.parse_args()
 
-    print(f"overhired companion  |  http://{args.host}:{args.port}")
-    print(f"  AI provider : {CFG['ai']['provider']}  ({CFG['ai']['endpoint']})")
-    print(f"  AI model    : {CFG['ai']['model']}")
-    print(f"  Output dir  : {CFG['output_dir']}")
+    # Apply log level to all overhired loggers
+    level = getattr(logging, args.log_level.upper(), logging.INFO)
+    logging.getLogger().setLevel(level)
+
+    print(f"\noverhired companion  |  http://{args.host}:{args.port}")
+    print(f"  AI provider  : {CFG['ai']['provider']}  ({CFG['ai']['endpoint']})")
+    print(f"  AI model     : {CFG['ai']['model']}")
+    print(f"  Output dir   : {CFG['output_dir']}")
+    print(f"  Log level    : {args.log_level}")
 
     # List cached parsers at startup
     from tool_server import list_parsers
@@ -537,7 +602,7 @@ def main() -> None:
         host=args.host,
         port=args.port,
         reload=args.reload,
-        log_level="info",
+        log_level=args.log_level,
     )
 
 

@@ -91,6 +91,25 @@ class TestExtractEndpoint:
 
 # ── /health ───────────────────────────────────────────────────────────────────
 
+
+
+class TestGenerateEndpoint:
+    def test_generate_uses_companion_resume_when_extension_sends_empty(self, client):
+        with patch("main.cfg_module.load_resume_text", return_value="mocked resume text") as load_resume, \
+             patch.object(main.AI, "generate", return_value="Dear Hiring Team,") as generate_mock:
+            resp = client.post("/generate", json={
+                "job_title": "Engineer",
+                "company": "Acme",
+                "job_description": "Build APIs",
+                "resume_text": "",
+            })
+
+        assert resp.status_code == 200
+        load_resume.assert_called_once_with(main.CFG)
+        _, user_prompt = generate_mock.call_args[0]
+        assert "mocked resume text" in user_prompt
+
+
 class TestHealthEndpoint:
     def test_health_returns_200(self, client):
         with patch.object(main.AI, "health_check", return_value=(False, "test-model")):

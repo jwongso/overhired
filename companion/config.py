@@ -67,6 +67,9 @@ DEFAULTS: dict[str, Any] = {
             "Thank you for your cooperation. The humans need never know."
         ),
     },
+    "resume": {
+        "path": "",   # e.g. ~/Documents/resume.pdf or ~/resume.md
+    },
 }
 
 
@@ -125,3 +128,40 @@ def load() -> dict[str, Any]:
     # Expand ~ in output_dir
     cfg["output_dir"] = str(Path(cfg["output_dir"]).expanduser())
     return cfg
+
+
+def load_resume_text(cfg: dict[str, Any]) -> str:
+    """Read resume text from the configured path.
+
+    Supports:
+      - .pdf  → text extracted via pypdf
+      - .md / .txt / .rst / any other text extension → read directly
+
+    Returns empty string if path not set, file missing, or extraction fails.
+    """
+    raw_path = cfg.get("resume", {}).get("path", "").strip()
+    if not raw_path:
+        return ""
+    path = Path(raw_path).expanduser()
+    if not path.exists():
+        print(f"[overhired] WARNING: resume not found at {path}", file=sys.stderr)
+        return ""
+    try:
+        if path.suffix.lower() == ".pdf":
+            try:
+                from pypdf import PdfReader  # type: ignore[import]
+            except ImportError:
+                print(
+                    "[overhired] WARNING: pypdf not installed — cannot read PDF resume. "
+                    "Run: pip install pypdf",
+                    file=sys.stderr,
+                )
+                return ""
+            reader = PdfReader(path)
+            return "\n".join(
+                page.extract_text() or "" for page in reader.pages
+            ).strip()
+        return path.read_text(encoding="utf-8").strip()
+    except Exception as exc:
+        print(f"[overhired] WARNING: could not read resume at {path}: {exc}", file=sys.stderr)
+        return ""

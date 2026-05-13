@@ -604,11 +604,31 @@ def main() -> None:
     parser.add_argument("--log-level", default="info",
                         choices=["debug", "info", "warning", "error"],
                         help="Log verbosity (default: info)")
+    parser.add_argument("--provider",  default=None,
+                        choices=["ollama", "openai", "claude"],
+                        help="Override AI provider from config.toml")
+    parser.add_argument("--model",     default=None,
+                        help="Override AI model from config.toml")
+    parser.add_argument("--endpoint",  default=None,
+                        help="Override AI endpoint URL from config.toml")
+    parser.add_argument("--api-key",   default=None, dest="api_key",
+                        help="Override AI API key from config.toml")
     args = parser.parse_args()
 
     # Apply log level to all overhired loggers
     level = getattr(logging, args.log_level.upper(), logging.INFO)
     logging.getLogger().setLevel(level)
+
+    # Apply CLI overrides to the global AI client and CFG
+    global AI
+    if any([args.provider, args.model, args.endpoint, args.api_key]):
+        override = dict(CFG["ai"])
+        if args.provider:  override["provider"] = args.provider
+        if args.model:     override["model"]    = args.model
+        if args.endpoint:  override["endpoint"] = args.endpoint.rstrip("/")
+        if args.api_key:   override["api_key"]  = args.api_key
+        CFG["ai"] = override
+        AI = ai_module.AIClient(override)
 
     print(f"\noverhired companion  |  http://{args.host}:{args.port}")
     print(f"  AI provider  : {CFG['ai']['provider']}  ({CFG['ai']['endpoint']})")

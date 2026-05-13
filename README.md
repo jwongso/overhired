@@ -70,7 +70,23 @@ python main.py
 
 ---
 
-## Architecture
+## Self-Healing Parsers
+
+The parser cache is not static — it validates every result before trusting it:
+
+| Situation | What happens |
+|-----------|-------------|
+| Parser raises an exception | Logged ⚠️, deleted, agentic loop regenerates |
+| Parser returns empty title | Logged ⚠️, deleted, agentic loop regenerates |
+| Title too short (<5 chars) | Logged ⚠️, deleted, agentic loop regenerates |
+| Title matches domain name (`"SEEK"`, `"LinkedIn"`) | Logged ⚠️, deleted, agentic loop regenerates |
+| Title too long or contains newlines | Logged ⚠️, deleted, agentic loop regenerates |
+| Title looks legitimate | ✅ `[cache] hit — title='Senior Engineer'` |
+
+When a site restructures its HTML, the bad parser is purged automatically on the next grab, and a fresh one is generated — no manual intervention needed.
+
+---
+
 
 ```mermaid
 graph TB

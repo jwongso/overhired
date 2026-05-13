@@ -161,9 +161,11 @@ def score_job_fit(job_description: str, resume_text: str, ai: "AIClient") -> dic
         resume_text:     Your resume text (plain text, not PDF binary).
     """
     system = (
-        "You are a brutally honest technical recruiter. "
+        "You are an encouraging technical recruiter who wants candidates to succeed. "
         "Evaluate how well the candidate's resume matches the job description. "
         "Be specific — name actual skills, tools, and requirements. "
+        "Lean optimistic: highlight transferable skills, adjacent experience, and growth potential. "
+        "Minor gaps or missing buzzwords should not heavily penalise the score if core competencies align. "
         "Reply with ONLY a JSON object:\n"
         "{\n"
         '  "score": <0-10 integer>,\n'
@@ -172,7 +174,7 @@ def score_job_fit(job_description: str, resume_text: str, ai: "AIClient") -> dic
         '  "overqualified_risk": true | false,\n'
         '  "experience_gap": "none" | "minor" | "significant",\n'
         '  "recommendation": "Apply" | "Apply with caveats" | "Stretch role" | "Skip",\n'
-        '  "reasoning": "2-3 sentence honest assessment"\n'
+        '  "reasoning": "2-3 sentence encouraging assessment focusing on strengths and growth opportunity"\n'
         "}"
     )
     user = (
@@ -198,6 +200,14 @@ _HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; overhired-research/1.0)",
     "Accept": "text/html,application/xhtml+xml",
 }
+
+# Known job board domains — we should never research these as the "company"
+_JOB_BOARDS = re.compile(
+    r"(?:^|\.)(?:seek\.com|seek\.co\.nz|linkedin\.com|indeed\.com|glassdoor\.com"
+    r"|monster\.com|ziprecruiter\.com|lever\.co|greenhouse\.io|workday\.com"
+    r"|bamboohr\.com|smartrecruiters\.com|jobvite\.com|myworkdayjobs\.com"
+    r"|seek\.com\.au|trademe\.co\.nz|careers\.govt\.nz)$"
+)
 
 # Private / loopback IP ranges that must never be fetched (SSRF protection)
 _PRIVATE_NETS = re.compile(
@@ -245,6 +255,35 @@ def _fetch_text(domain: str) -> str:
     return "\n\n".join(parts)[:8000]
 
 
+def _resolve_company_domain(company_name: str) -> str | None:
+    """Try to find the company's own website domain from the company name.
+
+    Tries common TLD suffixes in order; returns the first that resolves and
+    returns a non-error HTTP response. Returns None if none work.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "", company_name.lower())
+    if not slug:
+        return None
+    candidates = [
+        f"{slug}.com",
+        f"{slug}.io",
+        f"{slug}.co",
+        f"{slug}.co.nz",
+        f"{slug}.com.au",
+        f"{slug}.ai",
+        f"{slug}.tech",
+    ]
+    with httpx.Client(timeout=5, follow_redirects=True, headers=_HEADERS) as client:
+        for domain in candidates:
+            try:
+                resp = client.get(f"https://{domain}/")
+                if resp.status_code < 400:
+                    return domain
+            except Exception:
+                continue
+    return None
+
+
 def research_company(domain: str, company_name: str, ai: "AIClient") -> dict:
     """Fetch a company's website and generate a structured research summary.
 
@@ -252,16 +291,27 @@ def research_company(domain: str, company_name: str, ai: "AIClient") -> dict:
     tech stack hints, and red/green flags from their public messaging.
 
     Args:
-        domain:       Company website domain, e.g. 'stripe.com'.
+        domain:       Page domain (may be a job board — will be resolved away).
         company_name: Human-readable company name, e.g. 'Stripe'.
     """
+    # If the page came from a job board, resolve the company's own domain instead
+    resolved = domain
     try:
-        raw_text = _fetch_text(domain)
+        clean = _safe_domain(domain)
+    except ValueError:
+        clean = ""
+    if clean and _JOB_BOARDS.search(clean):
+        found = _resolve_company_domain(company_name)
+        if found:
+            resolved = found
+
+    try:
+        raw_text = _fetch_text(resolved)
     except ValueError as exc:
         return {"error": str(exc)}
 
     if not raw_text:
-        raw_text = f"No web content available for {domain}."
+        raw_text = f"No web content available for {resolved}."
 
     system = (
         "You are a thorough company analyst. Based on the scraped website text, "
@@ -283,7 +333,7 @@ def research_company(domain: str, company_name: str, ai: "AIClient") -> dict:
         "}"
     )
     user = (
-        f"Company: {company_name} ({domain})\n\n"
+        f"Company: {company_name} ({resolved})\n\n"
         f"Scraped website content:\n{raw_text}"
     )
 
@@ -293,4 +343,4 @@ def research_company(domain: str, company_name: str, ai: "AIClient") -> dict:
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         return json.loads(raw)
     except Exception as exc:
-        return {"error": str(exc), "overview": "", "domain": domain}
+        return {"error": str(exc), "overview": "", "domain": resolved}

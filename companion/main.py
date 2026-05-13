@@ -13,7 +13,7 @@ Endpoints:
     POST /generate  — build prompt, call AI, return cover letter (md + html)
     POST /save      — write cover_letter.md + cover_letter.html to disk
     POST /extract   — adaptive job extraction (cached parser or LLM-generated)
-    POST /fill      — adaptive ATS filler generation (cached JS or LLM-generated)
+    POST /fill      — adaptive ATS filler generation (cached JSON ops or LLM-generated)
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ app = FastAPI(title="overhired companion", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"chrome-extension://[\w-]+|moz-extension://[\w-]+",
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -259,7 +259,7 @@ def _bg_write_insight(dest: Path, job_description: str, role: str, company: str)
 def health():
     ai_ok, ai_model = AI.health_check()
     ats_filler_module.FILLERS_DIR.mkdir(parents=True, exist_ok=True)
-    fillers_cached = sum(1 for _ in ats_filler_module.FILLERS_DIR.glob("*.js"))
+    fillers_cached = sum(1 for _ in ats_filler_module.FILLERS_DIR.glob("*.json"))
     return {
         "status":         "ok",
         "ai_provider":     CFG["ai"]["provider"],
@@ -437,7 +437,7 @@ class FillRequest(BaseModel):
 
 
 class FillResponse(BaseModel):
-    code:   str
+    operations: list[dict]
     cached: bool
 
 
@@ -453,12 +453,12 @@ def extract_job(req: ExtractRequest, _: None = Depends(_require_token)):
 @app.post("/fill", response_model=FillResponse)
 def fill_form(req: FillRequest, _: None = Depends(_require_token)):
     logger.info("[fill] domain=%s fields=%d", req.domain, len(req.form_snapshot))
-    code = ats_filler_module.get_filler(req.domain, req.form_snapshot, AI)
-    if not code:
+    operations = ats_filler_module.get_filler(req.domain, req.form_snapshot, AI)
+    if not operations:
         raise HTTPException(status_code=422, detail="Could not generate a filler for this form")
     cached = ats_filler_module.last_cache_hit()
     logger.info("[fill] returning filler for %s (cached=%s)", req.domain, cached)
-    return FillResponse(code=code, cached=cached)
+    return FillResponse(operations=operations, cached=cached)
 
 
 @app.get("/parsers")
@@ -474,6 +474,17 @@ def delete_parser_endpoint(domain: str, _: None = Depends(_require_token)):
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
     return result
+
+
+@app.delete("/fillers/{domain}")
+def delete_filler_endpoint(domain: str, _: None = Depends(_require_token)):
+    from ats_filler import FILLERS_DIR
+    from tool_server import _safe_domain
+    path = FILLERS_DIR / f"{_safe_domain(domain)}.json"
+    if path.exists():
+        path.unlink()
+        return {"deleted": domain}
+    raise HTTPException(status_code=404, detail=f"No filler for {domain!r}")
 
 
 # ── Prompt builders ───────────────────────────────────────────────────────────

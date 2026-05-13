@@ -444,22 +444,35 @@ function GenerateTab({ settings, health }) {
 
       const fillResults = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: (code, fillData) => {
-          try {
-            const fn = new Function('data', `${code}\nreturn fill(data);`);
-            return fn(fillData);
-          } catch (e) {
-            return { filled: 0, errors: [e.message] };
+        func: (operations, fillData) => {
+          let filled = 0;
+          const errors = [];
+          const inputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+          const textareaSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+          for (const op of operations) {
+            const el = document.querySelector(op.selector);
+            if (!el) { errors.push(`Not found: ${op.selector}`); continue; }
+            const value = fillData[op.value_key] || '';
+            const setter = el.tagName === 'TEXTAREA' ? textareaSetter : inputSetter;
+            try {
+              setter.call(el, value);
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+              filled++;
+            } catch (e) {
+              errors.push(`Failed ${op.selector}: ${e.message}`);
+            }
           }
+          return { filled, errors };
         },
-        args: [r.code, fillData],
+        args: [r.operations, fillData],
       });
       const fillResult = fillResults[0]?.result;
       if (fillResult?.filled === 0) {
         const errs = fillResult.errors?.join('; ') || 'No fields matched';
         setErrMsg(`Filler ran but filled 0 fields — ${errs}. Regenerating next time.`);
         // Delete cached filler so it regenerates fresh next attempt
-        fetch(`${settings?.companion_url || 'http://localhost:7878'}/parsers/${encodeURIComponent(jobDomain)}`, {
+        fetch(`${settings?.companion_url || 'http://localhost:7878'}/fillers/${encodeURIComponent(jobDomain)}`, {
           method: 'DELETE', headers,
         }).catch(() => {});
         setFillState('error');

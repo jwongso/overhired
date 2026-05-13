@@ -31,6 +31,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     case 'SAVE':          handleSave(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));           break;
     case 'POLL_FILES':    handlePollFiles(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));      break;
     case 'PARSE_PDF':     handleParsePdf(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));      break;
+    case 'SCAN':          handleScan(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));          break;
     case 'EXTRACT':       handleExtract(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));       break;
     case 'FILL_ATS':      handleFillAts(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));       break;
     case 'DELETE_PARSER': handleDeleteParser(msg).then(sendResponse).catch(err => sendResponse({ error: err.message })); break;
@@ -158,20 +159,36 @@ async function handleParsePdf(msg) {
   return { resumeText };
 }
 
+// ── SCAN ──────────────────────────────────────────────────────────────────────
+
+async function handleScan(msg) {
+  const { domain, page_html, url, settings } = msg;
+  const resp = await fetch(`${companionUrl(settings)}/scan`, {
+    method:  'POST',
+    headers: companionHeaders(settings),
+    body:    JSON.stringify({ domain, page_html: page_html || '', url: url || '' }),
+  });
+  if (!resp.ok) {
+    const detail = await resp.json().catch(() => ({}));
+    throw new Error(detail.detail || `Scan failed: ${resp.status}`);
+  }
+  return resp.json(); // { mode: "job_posting" | "ats_form" }
+}
+
 // ── EXTRACT ───────────────────────────────────────────────────────────────────
 
 async function handleExtract(msg) {
-  const { domain, page_text, settings } = msg;
+  const { domain, page_text, page_html, url, settings } = msg;
   const resp = await fetch(`${companionUrl(settings)}/extract`, {
     method:  'POST',
     headers: companionHeaders(settings),
-    body:    JSON.stringify({ domain, page_text }),
+    body:    JSON.stringify({ domain, page_text, page_html: page_html || '', url: url || '' }),
   });
   if (!resp.ok) {
     const detail = await resp.json().catch(() => ({}));
     throw new Error(detail.detail || `Extract failed: ${resp.status}`);
   }
-  return resp.json(); // { title, company, description, location }
+  return resp.json(); // { title, company, description, location, mode }
 }
 
 async function handleFillAts(msg) {

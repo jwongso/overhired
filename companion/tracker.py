@@ -25,7 +25,7 @@ VALID_STATUSES = {
 # ── Schema ────────────────────────────────────────────────────────────────────
 
 # Bump this whenever the schema changes. Migration code below handles upgrades.
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS applications (
@@ -33,21 +33,42 @@ CREATE TABLE IF NOT EXISTS applications (
     domain       TEXT    NOT NULL,
     title        TEXT    NOT NULL,
     company      TEXT    NOT NULL,
-    date_applied TEXT    NOT NULL,   -- ISO date YYYY-MM-DD
+    date_applied TEXT    NOT NULL,
     status       TEXT    NOT NULL DEFAULT 'applied',
     notes        TEXT    NOT NULL DEFAULT '',
-    updated_at   TEXT    NOT NULL    -- ISO datetime
+    updated_at   TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_status       ON applications(status);
 CREATE INDEX IF NOT EXISTS idx_company      ON applications(company);
 CREATE INDEX IF NOT EXISTS idx_date_applied ON applications(date_applied);
+
+CREATE TABLE IF NOT EXISTS html_strategy_stats (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    domain    TEXT    NOT NULL,
+    strategy  TEXT    NOT NULL,
+    score     REAL    NOT NULL,
+    length    INTEGER NOT NULL,
+    time_ms   REAL    NOT NULL,
+    selected  INTEGER NOT NULL DEFAULT 0,
+    ran_at    TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_hss_domain ON html_strategy_stats(domain);
 """
 
-# Migration scripts keyed by the version they upgrade FROM.
-# e.g. _MIGRATIONS[1] upgrades schema v1 → v2.
 _MIGRATIONS: dict[int, str] = {
-    # Example (uncomment and edit when v2 is needed):
-    # 1: "ALTER TABLE applications ADD COLUMN url TEXT NOT NULL DEFAULT '';",
+    1: """
+CREATE TABLE IF NOT EXISTS html_strategy_stats (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    domain    TEXT    NOT NULL,
+    strategy  TEXT    NOT NULL,
+    score     REAL    NOT NULL,
+    length    INTEGER NOT NULL,
+    time_ms   REAL    NOT NULL,
+    selected  INTEGER NOT NULL DEFAULT 0,
+    ran_at    TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_hss_domain ON html_strategy_stats(domain);
+""",
 }
 
 
@@ -230,3 +251,88 @@ def delete_application(id: int) -> dict:
             return {"error": f"No application with id={id}"}
         conn.execute("DELETE FROM applications WHERE id=?", (id,))
     return {"deleted": id, "company": row["company"], "title": row["title"]}
+
+
+# ── HTML strategy catalog ─────────────────────────────────────────────────────
+
+def log_strategy_run(domain: str, results: list[dict], selected: str) -> None:
+    """Persist one benchmark run (all strategies) for a domain."""
+    now = datetime.utcnow().isoformat(sep=" ", timespec="seconds")
+    with _db() as conn:
+        conn.executemany(
+            "INSERT INTO html_strategy_stats "
+            "(domain, strategy, score, length, time_ms, selected, ran_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    domain,
+                    r["strategy"],
+                    r["score"],
+                    r["length"],
+                    r["time_ms"],
+                    1 if r["strategy"] == selected else 0,
+                    now,
+                )
+                for r in results
+            ],
+        )
+
+
+def get_best_strategy(domain: str, min_runs: int = 2) -> str | None:
+    """Return the historically best strategy for a domain, or None if not enough data.
+
+    Ranks by average score across all recorded runs where that strategy was selected.
+    Requires at least min_runs benchmarks before trusting the catalog.
+    """
+    with _db() as conn:
+        row = conn.execute(
+            """
+            SELECT strategy, AVG(score) AS avg_score, COUNT(*) AS runs
+            FROM html_strategy_stats
+            WHERE domain = ?
+            GROUP BY strategy
+            HAVING runs >= ?
+            ORDER BY avg_score DESC
+            LIMIT 1
+            """,
+            (domain, min_runs),
+        ).fetchone()
+    return row["strategy"] if row else None
+
+
+def get_strategy_catalog(domain: str | None = None) -> list[dict]:
+    """Return the strategy catalog, optionally filtered by domain.
+
+    Each row: domain, strategy, avg_score, runs, last_run.
+    Ordered by domain then avg_score desc.
+    """
+    with _db() as conn:
+        if domain:
+            rows = conn.execute(
+                """
+                SELECT domain, strategy,
+                       ROUND(AVG(score), 4) AS avg_score,
+                       ROUND(AVG(time_ms), 2) AS avg_time_ms,
+                       COUNT(*) AS runs,
+                       MAX(ran_at) AS last_run
+                FROM html_strategy_stats
+                WHERE domain = ?
+                GROUP BY domain, strategy
+                ORDER BY avg_score DESC
+                """,
+                (domain,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT domain, strategy,
+                       ROUND(AVG(score), 4) AS avg_score,
+                       ROUND(AVG(time_ms), 2) AS avg_time_ms,
+                       COUNT(*) AS runs,
+                       MAX(ran_at) AS last_run
+                FROM html_strategy_stats
+                GROUP BY domain, strategy
+                ORDER BY domain, avg_score DESC
+                """,
+            ).fetchall()
+    return [dict(r) for r in rows]

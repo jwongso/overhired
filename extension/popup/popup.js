@@ -148,28 +148,12 @@ function matchScore(slug, company) {
 function scrapeJobFromPage() {
   const info = {
     title: '', company: '', description: '', location: '', ats: 'generic',
-    domain: '', page_text: '', formFieldCount: 0,
+    domain: '', page_text: '', page_html: '', url: '',
   };
-  info.domain = window.location.hostname.replace(/^www\./, '');
-
-  // Narrow to main job content area to reduce noise for the LLM parser.
-  // These selectors target the content *container*, not individual fields —
-  // the adaptive parser (cached per domain) handles actual field extraction.
-  const CONTENT_SELECTORS = [
-    '[data-automation="jobAdDetails"]',          // SEEK
-    '[data-automation-id="jobPostingDescription"]', // Workday
-    '.posting',                                  // Lever
-    '#job-details', '.job-description',          // Greenhouse
-    '.jobs-description__content',               // LinkedIn
-    'article', 'main', '#main-content',
-  ];
-  let mainEl = null;
-  for (const sel of CONTENT_SELECTORS) {
-    const el = document.querySelector(sel);
-    if (el && (el.innerText || '').trim().length > 200) { mainEl = el; break; }
-  }
-  info.page_text = (mainEl ? mainEl.innerText : (document.body?.innerText || '')).slice(0, 12000);
-  info.formFieldCount = document.querySelectorAll('input:not([type=hidden]), textarea, select').length;
+  info.domain    = window.location.hostname.replace(/^www\./, '');
+  info.url       = window.location.href;
+  info.page_html = document.documentElement.outerHTML.slice(0, 500_000);
+  info.page_text = (document.body?.innerText || '').slice(0, 12000);
   return info;
 }
 
@@ -324,9 +308,21 @@ function GenerateTab({ settings, health }) {
         func: scrapeJobFromPage,
       });
       const j = results[0]?.result;
+      const domain = j?.domain || new URL(tab.url || '').hostname.replace(/^www\./, '');
 
-      // Detect ATS application form (≥3 visible fields) — skip extraction
-      if ((j?.formFieldCount || 0) >= 3) {
+      // Ask companion to determine page mode — reliable HTML+domain analysis,
+      // no more noisy client-side formFieldCount heuristic.
+      const scanResp = await sendMsg({
+        type: 'SCAN',
+        domain,
+        page_html: j?.page_html || '',
+        url: j?.url || tab.url || '',
+        settings,
+      });
+      if (scanResp?.error) throw new Error(scanResp.error);
+      const isAts = scanResp?.mode === 'ats_form';
+
+      if (isAts) {
         const stored = await load(['savedJobs']);
         const savedJobs = stored.savedJobs || [];
         if (!savedJobs.length) {
@@ -339,26 +335,23 @@ function GenerateTab({ settings, health }) {
         const scored = savedJobs.map(job => ({ job, score: matchScore(slug, job.company) }));
         const best = scored.reduce((a, b) => b.score > a.score ? b : a);
         if (best.score >= 0.8) {
-          // Clear winner — auto-load
-          loadAtsJob(best.job, j.domain);
+          loadAtsJob(best.job, domain);
         } else {
-          // Ambiguous — show picker
           setScanState('idle');
           setAtsCandidates(savedJobs);
-          setJobDomain(j.domain);
+          setJobDomain(domain);
           setAtsMode(true);
         }
         return;
       }
 
       setScanState('learning');
-      const url = tab.url || '';
-      const domain = j?.domain || new URL(url).hostname.replace(/^www\./, '');
-
       const resp = await sendMsg({
         type: 'EXTRACT',
         domain,
         page_text: j?.page_text || '',
+        page_html: j?.page_html || '',
+        url: j?.url || tab.url || '',
         settings,
       });
       if (resp?.error) throw new Error(resp.error);

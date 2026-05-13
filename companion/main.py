@@ -420,7 +420,24 @@ def jobs_recent(limit: int = 5, _: None = Depends(_require_token)):
 
 class ExtractRequest(BaseModel):
     domain:    str = Field(..., description="Hostname, e.g. 'linkedin.com'")
-    page_text: str = Field(..., description="document.body.innerText (max 12 000 chars)")
+    page_text: str = Field(default="", description="document.body.innerText fallback")
+    page_html: str = Field(default="", description="Full outerHTML -- companion cleans it")
+    url:       str = Field(default="", description="Full page URL for ATS path detection")
+
+
+class ScanRequest(BaseModel):
+    domain:    str
+    page_html: str = Field(default="")
+    url:       str = Field(default="")
+
+
+class ScanResponse(BaseModel):
+    mode: str   # "job_posting" | "ats_form"
+
+
+class BenchmarkExtractRequest(BaseModel):
+    domain:    str = Field(default="", description="Hostname for catalog logging")
+    page_html: str = Field(...,        description="Raw page HTML to benchmark strategies against")
 
 
 class ExtractResponse(BaseModel):
@@ -428,6 +445,7 @@ class ExtractResponse(BaseModel):
     company:     str = ""
     description: str = ""
     location:    str = ""
+    mode:        str = "job_posting"   # included so extension can trust companion's decision
 
 
 class FillRequest(BaseModel):
@@ -441,13 +459,44 @@ class FillResponse(BaseModel):
     cached: bool
 
 
+@app.post("/scan", response_model=ScanResponse)
+def scan_page(req: ScanRequest, _: None = Depends(_require_token)):
+    """Lightweight mode detection -- no LLM, just HTML/domain analysis.
+
+    Returns {"mode": "job_posting"} or {"mode": "ats_form"} instantly.
+    Call this first; only call /extract when mode == "job_posting".
+    """
+    import extractor
+    mode = extractor.detect_mode(req.page_html, req.domain, req.url)
+    logger.info("[scan] domain=%s -> %s", req.domain, mode)
+    return ScanResponse(mode=mode)
+
+
 @app.post("/extract", response_model=ExtractResponse)
 def extract_job(req: ExtractRequest, _: None = Depends(_require_token)):
     import extractor
-    logger.info("[extract] domain=%s page_text=%d chars", req.domain, len(req.page_text))
-    result = extractor.extract(req.domain, req.page_text, AI)
-    logger.info("[extract] result: title=%r company=%r", result.get("title",""), result.get("company",""))
+    logger.info("[extract] domain=%s html=%d chars text=%d chars",
+                req.domain, len(req.page_html), len(req.page_text))
+    mode   = extractor.detect_mode(req.page_html, req.domain, req.url)
+    result = extractor.extract(req.domain, req.page_text, AI, page_html=req.page_html)
+    result["mode"] = mode
+    logger.info("[extract] result: title=%r company=%r mode=%s",
+                result.get("title",""), result.get("company",""), mode)
     return ExtractResponse(**result)
+
+
+@app.post("/benchmark/extract")
+def benchmark_extract(req: BenchmarkExtractRequest, _: None = Depends(_require_token)):
+    """Benchmark all HTML cleaning strategies, log results to DB catalog."""
+    import extractor
+    return extractor.benchmark_html(req.page_html, domain=req.domain)
+
+
+@app.get("/benchmark/catalog")
+def benchmark_catalog(domain: str = ""):
+    """Return per-domain strategy catalog from DB. ?domain=nz.seek.com for one domain."""
+    import tracker
+    return tracker.get_strategy_catalog(domain or None)
 
 
 @app.post("/fill", response_model=FillResponse)

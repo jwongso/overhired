@@ -152,29 +152,45 @@ function scrapeJobFromPage() {
   };
   info.domain = window.location.hostname.replace(/^www\./, '');
 
-  // Try to narrow to the main job content — avoids noise from nav, related jobs, footer
+  // Direct structured extraction — try known data-automation / semantic selectors
+  // before falling back to LLM extraction on page_text.
+  const _text = sel => (document.querySelector(sel)?.innerText || '').trim().replace(/\s+/g, ' ');
+
+  // SEEK (nz.seek.com, seek.com.au)
+  info.title    = info.title    || _text('[data-automation="job-detail-title"]');
+  info.company  = info.company  || _text('[data-automation="advertiser-name"]');
+  info.location = info.location || _text('[data-automation="job-detail-location"]');
+
+  // Greenhouse
+  info.title    = info.title    || _text('.job-title h1, .job__title h1, .posting-headline h2');
+  info.company  = info.company  || _text('.company-name, .brand-name');
+  info.location = info.location || _text('.location, .posting-categories .location');
+
+  // Lever
+  info.title    = info.title    || _text('.posting-headline h2');
+  info.location = info.location || _text('.posting-headline .location');
+
+  // LinkedIn
+  info.title    = info.title    || _text('.job-details-jobs-unified-top-card__job-title h1');
+  info.company  = info.company  || _text('.job-details-jobs-unified-top-card__company-name');
+
+  // Generic fallbacks
+  info.title    = info.title    || _text('h1');
+
+  // Try to narrow page_text to the main job content area (reduces LLM noise)
   const CONTENT_SELECTORS = [
-    // SEEK
-    '[data-automation="jobDescription"]',
-    '[data-automation="job-detail-title"]',
-    // Greenhouse / Lever / Ashby
-    '#content', '.job-post', '.posting', '.job-description',
-    // LinkedIn
-    '.jobs-description', '.job-details',
-    // Workday
-    '[data-automation-id="jobPostingDescription"]',
-    // Generic
-    'article', 'main', '#main-content', '.job-content',
+    '[data-automation="jobAdDetails"]',   // SEEK
+    '#job-details', '.job-description', '.posting-description',  // Greenhouse/Lever
+    '.jobs-description__content',         // LinkedIn
+    '[data-automation-id="jobPostingDescription"]',  // Workday
+    'article', 'main', '#main-content',
   ];
   let mainEl = null;
   for (const sel of CONTENT_SELECTORS) {
     const el = document.querySelector(sel);
     if (el && (el.innerText || '').trim().length > 200) { mainEl = el; break; }
   }
-  const rawText = mainEl
-    ? mainEl.innerText
-    : (document.body?.innerText || '');
-
+  const rawText = mainEl ? mainEl.innerText : (document.body?.innerText || '');
   info.page_text = rawText.slice(0, 12000);
   info.formFieldCount = document.querySelectorAll('input:not([type=hidden]), textarea, select').length;
   return info;
@@ -360,9 +376,21 @@ function GenerateTab({ settings, health }) {
 
       setScanState('learning');
       const url = tab.url || '';
+      const domain = j?.domain || new URL(url).hostname.replace(/^www\./, '');
+
+      // If direct DOM extraction already got title + company, skip LLM extract entirely
+      if (j?.title && j?.company) {
+        setTitle(j.title);
+        setCompany(j.company);
+        setDesc(j.description || '');
+        setJobDomain(domain);
+        setScanState('found');
+        return;
+      }
+
       const resp = await sendMsg({
         type: 'EXTRACT',
-        domain: j?.domain || new URL(url).hostname.replace(/^www\./, ''),
+        domain,
         page_text: j?.page_text || '',
         settings,
       });
@@ -375,7 +403,7 @@ function GenerateTab({ settings, health }) {
       setTitle(resp.title || '');
       setCompany(resp.company || '');
       setDesc(resp.description || '');
-      setJobDomain(j?.domain || new URL(url).hostname.replace(/^www\./, ''));
+      setJobDomain(domain);
       setScanState('found');
     } catch (err) {
       setScanError(err.message || 'Grab failed.');

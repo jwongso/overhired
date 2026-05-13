@@ -196,6 +196,21 @@ def extract_job(req: ExtractRequest, _: None = Depends(_require_token)):
     return ExtractResponse(**result)
 
 
+@app.get("/parsers")
+def list_parsers_endpoint(_: None = Depends(_require_token)):
+    from tool_server import list_parsers
+    return list_parsers()
+
+
+@app.delete("/parsers/{domain}")
+def delete_parser_endpoint(domain: str, _: None = Depends(_require_token)):
+    from tool_server import delete_parser
+    result = delete_parser(domain)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
 # ── Prompt builders ───────────────────────────────────────────────────────────
 
 def _build_system_prompt() -> str:
@@ -360,6 +375,14 @@ def main() -> None:
     print(f"  AI provider : {CFG['ai']['provider']}  ({CFG['ai']['endpoint']})")
     print(f"  AI model    : {CFG['ai']['model']}")
     print(f"  Output dir  : {CFG['output_dir']}")
+
+    # List cached parsers at startup
+    from tool_server import list_parsers
+    cached = list_parsers()
+    if cached["count"]:
+        print(f"  Cached parsers ({cached['count']}):", ", ".join(p["domain"] for p in cached["parsers"]))
+    else:
+        print("  Cached parsers: none (will generate on first scan of each site)")
     print()
 
     uvicorn.run(

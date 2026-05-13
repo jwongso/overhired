@@ -24,9 +24,11 @@ function companionUrl(settings) {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   switch (msg.type) {
-    case 'GENERATE':  handleGenerate(msg).then(sendResponse).catch(err => sendResponse({ error: err.message })); break;
-    case 'SAVE':      handleSave(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));     break;
-    case 'PARSE_PDF': handleParsePdf(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));break;
+    case 'GENERATE':      handleGenerate(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));      break;
+    case 'SAVE':          handleSave(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));           break;
+    case 'PARSE_PDF':     handleParsePdf(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));      break;
+    case 'EXTRACT':       handleExtract(msg).then(sendResponse).catch(err => sendResponse({ error: err.message }));       break;
+    case 'DELETE_PARSER': handleDeleteParser(msg).then(sendResponse).catch(err => sendResponse({ error: err.message })); break;
     default: return false;
   }
   return true; // keep channel open for async response
@@ -150,4 +152,36 @@ async function handleParsePdf(msg) {
   if (!resumeText) throw new Error('Could not extract text from PDF (may be image-only).');
 
   return { resumeText };
+}
+
+// ── EXTRACT ───────────────────────────────────────────────────────────────────
+
+async function handleExtract(msg) {
+  const { domain, page_text, settings } = msg;
+  const resp = await fetch(`${companionUrl(settings)}/extract`, {
+    method:  'POST',
+    headers: companionHeaders(settings),
+    body:    JSON.stringify({ domain, page_text }),
+  });
+  if (!resp.ok) {
+    const detail = await resp.json().catch(() => ({}));
+    throw new Error(detail.detail || `Extract failed: ${resp.status}`);
+  }
+  return resp.json(); // { title, company, description, location }
+}
+
+// ── DELETE_PARSER ─────────────────────────────────────────────────────────────
+
+async function handleDeleteParser(msg) {
+  const { domain, settings } = msg;
+  const safe = domain.toLowerCase().replace(/^www\./, '');
+  const resp = await fetch(`${companionUrl(settings)}/parsers/${encodeURIComponent(safe)}`, {
+    method:  'DELETE',
+    headers: companionHeaders(settings),
+  });
+  if (!resp.ok) {
+    const detail = await resp.json().catch(() => ({}));
+    throw new Error(detail.detail || `Delete parser failed: ${resp.status}`);
+  }
+  return resp.json();
 }

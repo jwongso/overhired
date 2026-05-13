@@ -251,6 +251,10 @@ function scrapeJobFromPage() {
   // 6. Description fallback
   if (!info.description) info.description = findDescBlock();
 
+  // Always include domain + page_text so the popup can fall back to /extract
+  info.domain    = window.location.hostname.replace(/^www\./, '');
+  info.page_text = (document.body?.innerText || '').slice(0, 12000);
+
   return info;
 }
 
@@ -324,29 +328,52 @@ function GenerateTab({ settings, resumeLoaded }) {
         func: scrapeJobFromPage,
       });
       const j = results[0]?.result;
-      if (!j?.title && !j?.company) {
-        const url = tab.url || '';
-        const isListView =
-          /linkedin\.com\/jobs\/(collections|search)/i.test(url) ||
-          /seek\.co\.nz\/jobs[\/?]/i.test(url) ||
-          /indeed\.com\/jobs[\/?]/i.test(url);
-        setScanError(isListView
-          ? 'No job found - you are on a list/search page. Open the specific job in a new tab, then scan again.'
-          : 'No job info detected - make sure you are on a job posting page.'
-        );
+
+      if (j?.title) {
+        // Fast path: JS extractor succeeded (LinkedIn, Seek, JSON-LD, etc.)
+        setTitle(j.title       || '');
+        setCompany(j.company   || '');
+        setDesc(j.description  || '');
+        setAts(j.ats           || 'generic');
+        setScanState('found');
+        return;
+      }
+
+      // Slow path: unknown site — ask companion to learn it via /extract
+      const url = tab.url || '';
+      const isListView =
+        /linkedin\.com\/jobs\/(collections|search)/i.test(url) ||
+        /seek\.co\.nz\/jobs[\/?]/i.test(url) ||
+        /indeed\.com\/jobs[\/?]/i.test(url);
+      if (isListView) {
+        setScanError('No job found - you are on a list/search page. Open the specific job in a new tab, then scan again.');
         setScanState('idle');
         return;
       }
-      setTitle(j.title       || '');
-      setCompany(j.company   || '');
-      setDesc(j.description  || '');
-      setAts(j.ats           || 'generic');
+
+      setScanState('learning');
+      const resp = await sendMsg({
+        type:      'EXTRACT',
+        domain:    j?.domain    || new URL(url).hostname.replace(/^www\./, ''),
+        page_text: j?.page_text || '',
+        settings,
+      });
+      if (resp?.error) throw new Error(resp.error);
+      if (!resp?.title) {
+        setScanError('Could not detect job info - make sure you are on a job posting page.');
+        setScanState('idle');
+        return;
+      }
+      setTitle(resp.title       || '');
+      setCompany(resp.company   || '');
+      setDesc(resp.description  || '');
+      setAts('generic');
       setScanState('found');
     } catch (err) {
       setScanError(err.message || 'Scan failed.');
       setScanState('idle');
     }
-  }, []);
+  }, [settings]);
 
   const reset = useCallback(() => {
     setScanState('idle');
@@ -408,11 +435,17 @@ function GenerateTab({ settings, resumeLoaded }) {
     <div class="panel">
       <${FengShuiPanel} />
       <button class="btn btn-primary btn-full" style="margin-bottom:8px"
-        disabled=${scanState === 'scanning'} onClick=${scanPage}>
+        disabled=${scanState === 'scanning' || scanState === 'learning'} onClick=${scanPage}>
         ${scanState === 'scanning'
           ? html`<span class="spinner"></span> Scanning...`
+          : scanState === 'learning'
+          ? html`<span class="spinner"></span> Learning this site...`
           : 'Scan Page'}
       </button>
+      ${scanState === 'learning' && html`
+        <p style="color:var(--muted);font-size:11px;margin-top:0">
+          This site hasn't been seen before. The companion is generating a parser — this takes ~30s once, then it's instant.
+        </p>`}
       ${scanError && html`
         <p style="color:var(--muted);font-size:11px;margin-top:0">${scanError}</p>`}
       ${isListView && html`
@@ -486,6 +519,60 @@ function GenerateTab({ settings, resumeLoaded }) {
         <div class="preview" dangerouslySetInnerHTML=${{
           __html: marked.parse(result.cover_letter_md || '')
         }} />`}
+    </div>`;
+}
+
+// -- Parser Cache section (inside Settings) ------------------------------------
+
+function ParserCacheSection({ settings }) {
+  const [domain,  setDomain]  = useState('');
+  const [status,  setStatus]  = useState(''); // '' | 'ok' | 'error'
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    chrome.tabs.query({ active: true, currentWindow: true })
+      .then(([tab]) => {
+        if (tab?.url) {
+          try { setDomain(new URL(tab.url).hostname.replace(/^www\./, '')); }
+          catch { /* non-URL tab */ }
+        }
+      });
+  }, []);
+
+  const regenerate = useCallback(async () => {
+    if (!domain) return;
+    setStatus('');
+    setMessage('');
+    try {
+      const resp = await sendMsg({ type: 'DELETE_PARSER', domain, settings });
+      if (resp?.error) { setStatus('error'); setMessage(resp.error); }
+      else { setStatus('ok'); setMessage(`Parser for ${domain} deleted — will regenerate on next scan.`); }
+    } catch (e) {
+      setStatus('error'); setMessage(e.message || 'Failed');
+    }
+  }, [domain, settings]);
+
+  return html`
+    <div class="settings-section">
+      <div class="settings-title">Parser Cache</div>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:6px">
+        The companion caches a site-specific parser after the first scan of each job board.
+        If a site changes its layout, delete the cached parser to force regeneration.
+      </p>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="text" value=${domain}
+          onInput=${e => setDomain(e.target.value)}
+          placeholder="Domain, e.g. example.com"
+          style="flex:1;font-size:12px" />
+        <button class="btn btn-secondary" style="white-space:nowrap" onClick=${regenerate}
+          disabled=${!domain}>
+          Regenerate
+        </button>
+      </div>
+      ${message && html`
+        <p style="font-size:11px;margin-top:4px;color:${status === 'ok' ? '#4caf7d' : 'var(--muted)'}">
+          ${message}
+        </p>`}
     </div>`;
 }
 
@@ -676,6 +763,9 @@ function SettingsTab({ settings, onSave, onResumeLoaded }) {
               placeholder="Custom AI prompt injection text..." />
           </div>`}
       </div>
+
+      <!-- Parser Cache -->
+      <${ParserCacheSection} settings=${s} />
 
       <button class="btn btn-primary btn-full" onClick=${saveAll}>
         ${saved ? 'Saved!' : 'Save Settings'}

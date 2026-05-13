@@ -194,14 +194,19 @@ def _agentic_fill(domain: str, form_snapshot: list[dict], ai: "AIClient") -> str
 
     # Fallback: LLM returned code as plain text without calling tools
     last_text = loop_result.get("last_text", "")
+    _log.debug("[fill] last_text preview for %s: %r", domain, last_text[:300])
     if last_text:
         extracted = _extract_js_from_text(last_text)
-        if extracted and _validate_candidate(extracted, form_snapshot).get("valid"):
-            save_filler(domain=domain, code=extracted)
-            _log.info("[fill] extracted JS from plain text response for %s", domain)
-            return _try_cached(domain, form_snapshot)
-        elif extracted:
-            _log.warning("[fill] extracted JS failed validation for %s", domain)
+        _log.debug("[fill] extracted JS for %s: %r", domain, (extracted or "")[:200])
+        if extracted:
+            validation = _validate_candidate(extracted, form_snapshot)
+            _log.info("[fill] extracted JS validation for %s: %s", domain, validation)
+            if validation.get("valid"):
+                save_filler(domain=domain, code=extracted)
+                _log.info("[fill] auto-saved extracted filler for %s", domain)
+                return _try_cached(domain, form_snapshot)
+        else:
+            _log.warning("[fill] could not extract JS function from LLM text for %s", domain)
 
     return None
 

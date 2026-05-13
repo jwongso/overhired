@@ -94,6 +94,11 @@ class AIClient:
             "temperature": 0.7,
             "stream": False,
         }
+        # Qwen3 and other reasoning models expose chain-of-thought tokens by
+        # default.  Suppress them so they don't bleed into the cover letter.
+        # Ollama accepts "think": false at the top level of the request body.
+        if self.provider == "ollama":
+            payload["think"] = False
         try:
             resp = httpx.post(
                 url,

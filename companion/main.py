@@ -12,6 +12,7 @@ Endpoints:
     GET  /health    — liveness probe used by the extension
     POST /generate  — build prompt, call AI, return cover letter (md + html)
     POST /save      — write cover_letter.md + cover_letter.html to disk
+    POST /extract   — adaptive job extraction (cached parser or LLM-generated)
 """
 
 from __future__ import annotations
@@ -172,6 +173,27 @@ def save(req: SaveRequest, _: None = Depends(_require_token)):
     html_path.write_text(req.cover_letter_html, encoding="utf-8")
 
     return SaveResponse(md_path=str(md_path), html_path=str(html_path))
+
+
+# ── /extract ──────────────────────────────────────────────────────────────────
+
+class ExtractRequest(BaseModel):
+    domain:    str = Field(..., description="Hostname, e.g. 'linkedin.com'")
+    page_text: str = Field(..., description="document.body.innerText (max 12 000 chars)")
+
+
+class ExtractResponse(BaseModel):
+    title:       str = ""
+    company:     str = ""
+    description: str = ""
+    location:    str = ""
+
+
+@app.post("/extract", response_model=ExtractResponse)
+def extract_job(req: ExtractRequest, _: None = Depends(_require_token)):
+    import extractor
+    result = extractor.extract(req.domain, req.page_text, AI)
+    return ExtractResponse(**result)
 
 
 # ── Prompt builders ───────────────────────────────────────────────────────────

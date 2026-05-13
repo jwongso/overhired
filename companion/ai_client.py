@@ -7,6 +7,7 @@ Supports:
   - claude     : api.anthropic.com /v1/messages  (different schema)
 
 All paths return a plain string (the model's reply text).
+generate_with_tools() runs an OpenAI-compatible tool-use agentic loop.
 """
 
 from __future__ import annotations
@@ -57,6 +58,79 @@ class AIClient:
         if self.provider == "claude":
             return self._claude(system_prompt, user_prompt)
         return self._openai_compatible(system_prompt, user_prompt)
+
+    def generate_with_tools(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        tools: list[dict],
+        tool_functions: dict,
+        max_iters: int = 6,
+    ) -> dict:
+        """Run an OpenAI-compatible tool-use agentic loop.
+
+        The LLM receives tool definitions and can call them repeatedly.
+        The loop ends when the LLM stops calling tools, calls save_parser,
+        or max_iters is reached.
+
+        Returns:
+            {
+                "result": dict | None,   # last tool result (if any)
+                "saved": bool,           # True if save_parser was called
+                "iterations": int,
+                "error": str | None,
+            }
+        """
+        messages: list[dict] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_prompt},
+        ]
+
+        last_result: dict | None = None
+        saved = False
+
+        for i in range(max_iters):
+            response = self._call_with_tools(messages, tools)
+            assistant_msg = response["content"]
+            tool_calls = response.get("tool_calls", [])
+
+            # Append assistant turn (with or without tool_calls)
+            messages.append(assistant_msg)
+
+            if not tool_calls:
+                break
+
+            # Execute each requested tool call and feed results back
+            for tc in tool_calls:
+                fn = tool_functions.get(tc["name"])
+                if fn is None:
+                    result = {"error": f"Unknown tool: {tc['name']}"}
+                else:
+                    try:
+                        result = fn(**tc["arguments"])
+                    except Exception as exc:
+                        result = {"error": str(exc)}
+
+                last_result = result
+                if tc["name"] == "save_parser":
+                    saved = True
+
+                messages.append({
+                    "role":         "tool",
+                    "tool_call_id": tc["id"],
+                    "name":         tc["name"],
+                    "content":      json.dumps(result),
+                })
+
+            if saved:
+                break
+
+        return {
+            "result":     last_result,
+            "saved":      saved,
+            "iterations": i + 1,
+            "error":      None,
+        }
 
     def health_check(self) -> tuple[bool, str]:
         """Return (is_reachable, model_name).
@@ -135,6 +209,54 @@ class AIClient:
         elif self.provider == "ollama":
             headers["Authorization"] = "Bearer ollama"
         return headers
+
+    def _call_with_tools(self, messages: list[dict], tools: list[dict]) -> dict:
+        """Single LLM call with tool definitions. Returns normalised response dict."""
+        url = f"{self.endpoint}/v1/chat/completions"
+        payload = {
+            "model":       self.model,
+            "messages":    messages,
+            "tools":       tools,
+            "tool_choice": "auto",
+            "stream":      False,
+        }
+        if self.provider == "ollama":
+            payload["think"] = False
+        try:
+            resp = httpx.post(
+                url,
+                headers=self._openai_headers(),
+                json=payload,
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+        except httpx.TimeoutException:
+            raise AIError(f"Tool-use request timed out after {self.timeout}s.")
+        except httpx.HTTPStatusError as exc:
+            raise AIError(f"AI provider returned {exc.response.status_code}: "
+                          f"{exc.response.text[:300]}")
+        except httpx.ConnectError:
+            raise AIError(f"Cannot connect to AI endpoint {self.endpoint}.")
+
+        data = resp.json()
+        try:
+            choice  = data["choices"][0]
+            message = choice["message"]
+            raw_tcs = message.get("tool_calls") or []
+            return {
+                "stop_reason": "tool_use" if raw_tcs else choice.get("finish_reason", "stop"),
+                "content":     message,
+                "tool_calls": [
+                    {
+                        "id":        tc["id"],
+                        "name":      tc["function"]["name"],
+                        "arguments": json.loads(tc["function"]["arguments"]),
+                    }
+                    for tc in raw_tcs
+                ],
+            }
+        except (KeyError, IndexError, json.JSONDecodeError) as exc:
+            raise AIError(f"Unexpected tool response shape: {exc}\n{json.dumps(data)[:300]}")
 
     # ── Anthropic Claude ─────────────────────────────────────────────────────
 

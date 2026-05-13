@@ -16,13 +16,15 @@ const IN_FULL_TAB = SEARCH.has('tab');
 const AUSPICE_URL = 'https://fengshui.overhired.work';
 
 async function fetchAuspice() {
-  const tomorrow = new Date(Date.now() + 86400000);
-  const twoWeeks = new Date(Date.now() + 15 * 86400000);
-  const fmt = d => d.toISOString().slice(0, 10);
+  // Use local date strings (en-CA locale gives YYYY-MM-DD) so timezone is correct.
+  const fmt = d => d.toLocaleDateString('en-CA');
+  const today    = fmt(new Date());
+  const tomorrow = fmt(new Date(Date.now() + 86400000));
+  const twoWeeks = fmt(new Date(Date.now() + 15 * 86400000));
   try {
     const [dayRes, bestRes] = await Promise.all([
-      fetch(`${AUSPICE_URL}/today`).then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch(`${AUSPICE_URL}/best?activity=interview&from=${fmt(tomorrow)}&to=${fmt(twoWeeks)}&weekend=false`)
+      fetch(`${AUSPICE_URL}/day?date=${today}`).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${AUSPICE_URL}/best?activity=interview&from=${tomorrow}&to=${twoWeeks}&weekend=false`)
         .then(r => r.ok ? r.json() : null).catch(() => null),
     ]);
     return { day: dayRes, best: bestRes };

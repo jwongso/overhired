@@ -80,7 +80,7 @@ async function handleGenerate(msg) {
 // ── SAVE ──────────────────────────────────────────────────────────────────────
 
 async function handleSave(msg) {
-  const { company, role, coverMd, coverHtml, settings } = msg;
+  const { company, role, coverMd, coverHtml, domain, jobDescription, resumeText, settings } = msg;
   const resp = await fetch(`${companionUrl(settings)}/save`, {
     method:  'POST',
     headers: companionHeaders(settings),
@@ -89,6 +89,9 @@ async function handleSave(msg) {
       role,
       cover_letter_md:   coverMd,
       cover_letter_html: coverHtml,
+      domain:            domain         || '',
+      job_description:   jobDescription || '',
+      resume_text:       resumeText     || '',
     }),
   });
   if (!resp.ok) {

@@ -294,6 +294,7 @@ function GenerateTab({ settings, resumeLoaded }) {
   const [title,      setTitle]      = useState('');
   const [company,    setCompany]    = useState('');
   const [desc,       setDesc]       = useState('');
+  const [jobDomain,  setJobDomain]  = useState('');
   const [ats,        setAts]        = useState('generic');
   const [showDesc,   setShowDesc]   = useState(false);
   const [scanError,  setScanError]  = useState('');
@@ -334,6 +335,7 @@ function GenerateTab({ settings, resumeLoaded }) {
         setTitle(j.title       || '');
         setCompany(j.company   || '');
         setDesc(j.description  || '');
+        setJobDomain(j.domain  || '');
         setAts(j.ats           || 'generic');
         setScanState('found');
         return;
@@ -367,6 +369,7 @@ function GenerateTab({ settings, resumeLoaded }) {
       setTitle(resp.title       || '');
       setCompany(resp.company   || '');
       setDesc(resp.description  || '');
+      setJobDomain(new URL(url).hostname.replace(/^www\./, ''));
       setAts('generic');
       setScanState('found');
     } catch (err) {
@@ -378,7 +381,7 @@ function GenerateTab({ settings, resumeLoaded }) {
   const reset = useCallback(() => {
     setScanState('idle');
     setScanError('');
-    setTitle(''); setCompany(''); setDesc('');
+    setTitle(''); setCompany(''); setDesc(''); setJobDomain('');
     setResult(null); setSavedPaths(null);
     setStatus('idle'); setErrMsg('');
   }, []);
@@ -401,8 +404,11 @@ function GenerateTab({ settings, resumeLoaded }) {
       sendMsg({
         type: 'SAVE',
         company, role: title,
-        coverMd:   resp.cover_letter_md,
-        coverHtml: resp.cover_letter_html,
+        coverMd:        resp.cover_letter_md,
+        coverHtml:      resp.cover_letter_html,
+        domain:         jobDomain,
+        jobDescription: desc,
+        resumeText:     settings.resume_text || '',
         settings,
       }).then(r => { if (r?.md_path) setSavedPaths(r); })
         .catch(err => console.warn('[overhired] Auto-save failed:', err.message));
@@ -410,7 +416,7 @@ function GenerateTab({ settings, resumeLoaded }) {
       setErrMsg(e.message);
       setStatus('error');
     }
-  }, [title, company, desc, ats, perJob, settings]);
+  }, [title, company, desc, jobDomain, ats, perJob, settings]);
 
   const fillForm = useCallback(async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });

@@ -7,6 +7,7 @@ the extractor so no LLM or file I/O happens.
 import json
 from unittest.mock import patch
 
+import main
 import pytest
 from fastapi.testclient import TestClient
 
@@ -76,13 +77,13 @@ class TestExtractEndpoint:
         try:
             with patch("extractor.extract", return_value=MOCK_RESULT):
                 resp = test_client.post("/extract", json={"domain": "x.com", "page_text": "y"})
-            assert resp.status_code == 401
-            # With correct token
-            resp2 = test_client.post(
-                "/extract",
-                json={"domain": "x.com", "page_text": "y"},
-                headers={"X-Overhired-Token": "secret"},
-            )
+                assert resp.status_code == 401
+                # With correct token
+                resp2 = test_client.post(
+                    "/extract",
+                    json={"domain": "x.com", "page_text": "y"},
+                    headers={"X-Overhired-Token": "secret"},
+                )
             assert resp2.status_code == 200
         finally:
             main.CFG["auth_token"] = ""
@@ -92,9 +93,11 @@ class TestExtractEndpoint:
 
 class TestHealthEndpoint:
     def test_health_returns_200(self, client):
-        resp = client.get("/health")
+        with patch.object(main.AI, "health_check", return_value=(False, "test-model")):
+            resp = client.get("/health")
         assert resp.status_code == 200
 
     def test_health_has_status_field(self, client):
-        resp = client.get("/health")
+        with patch.object(main.AI, "health_check", return_value=(False, "test-model")):
+            resp = client.get("/health")
         assert "status" in resp.json()

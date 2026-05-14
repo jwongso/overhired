@@ -805,6 +805,9 @@ def main() -> None:
         for w in warnings:
             print(f"  ⚠  {w}")
 
+    # Always cache the extracted resume text so the user can inspect it
+    cfg_module.load_resume_text(CFG)
+
     # Auto-populate profile from resume on first run
     if cfg_module.profile_needs_population(CFG):
         _populate_profile_from_resume()

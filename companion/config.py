@@ -297,10 +297,23 @@ def load_resume_text(cfg: dict[str, Any]) -> str:
                 )
                 return ""
             reader = PdfReader(path)
-            return "\n".join(
+            text = "\n".join(
                 page.extract_text() or "" for page in reader.pages
             ).strip()
-        return path.read_text(encoding="utf-8").strip()
+            _save_resume_cache(text)
+            return text
+        text = path.read_text(encoding="utf-8").strip()
+        _save_resume_cache(text)
+        return text
     except Exception as exc:
         print(f"[overhired] WARNING: could not read resume at {path}: {exc}", file=sys.stderr)
         return ""
+
+
+def _save_resume_cache(text: str) -> None:
+    """Write extracted resume text to ~/.overhired/resume.txt for inspection."""
+    try:
+        cache = _config_path().parent / "resume.txt"
+        cache.write_text(text, encoding="utf-8")
+    except Exception as exc:
+        print(f"[overhired] WARNING: could not save resume cache: {exc}", file=sys.stderr)

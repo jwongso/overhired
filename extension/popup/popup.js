@@ -2,7 +2,7 @@
  * overhired - popup UI (Preact + htm, no build step)
  */
 import { h, render }       from '../vendor/preact.module.js';
-import { useState, useEffect, useCallback } from '../vendor/preact-hooks.module.js';
+import { useState, useEffect, useCallback, useRef } from '../vendor/preact-hooks.module.js';
 import { marked }          from '../vendor/marked.esm.js';
 import htm                 from '../vendor/htm.module.js';
 
@@ -609,6 +609,10 @@ function App() {
   const [health,   setHealth]   = useState(undefined);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
 
+  // Keep a ref to the current settings so the heartbeat interval always uses
+  // the latest companion_url without needing to re-register the timer.
+  const settingsRef = useRef(DEFAULT_SETTINGS);
+
   useEffect(() => {
     load([STORAGE_KEYS.settings]).then(async d => {
       const raw = d.settings || {};
@@ -619,6 +623,7 @@ function App() {
           ? raw.companion_token : DEFAULT_SETTINGS.companion_token,
       };
       setSettings(s);
+      settingsRef.current = s;
       store({ [STORAGE_KEYS.settings]: s });
 
       const h = await companionHealth(s.companion_url);
@@ -645,6 +650,15 @@ function App() {
         }
       }
     });
+
+    // Heartbeat: poll /health every 10 s so the pill goes red immediately
+    // after the companion is killed, without requiring a panel re-open.
+    const timer = setInterval(async () => {
+      const h = await companionHealth(settingsRef.current.companion_url);
+      setHealth(h);
+    }, 10_000);
+
+    return () => clearInterval(timer);
   }, []);
 
   return html`

@@ -390,7 +390,15 @@ def extract(domain: str, page_text: str, ai: "AIClient",
 
     # ── 3. One-shot fallback (models without tool support) ────────────────────
     try:
-        return _oneshot_extract(page_text, ai)
+        result = _oneshot_extract(page_text, ai)
+        if result.get("title"):
+            # Bootstrap a reusable parser from this successful extraction so
+            # future requests for this domain skip the LLM entirely.
+            try:
+                _bootstrap_parser_from_result(domain, page_text, result, ai)
+            except Exception as exc:
+                _log.warning("[extract] bootstrap failed for %s: %s", domain, exc)
+        return result
     except Exception:
         return dict(_EMPTY)
 
@@ -528,3 +536,59 @@ def _oneshot_extract(page_text: str, ai: "AIClient") -> dict:
         return {k: str(data.get(k, "")) for k in _EMPTY}
     except json.JSONDecodeError:
         return dict(_EMPTY)
+
+
+def _bootstrap_parser_from_result(domain: str, page_text: str,
+                                   known: dict, ai: "AIClient") -> None:
+    """After a successful one-shot extraction, ask the LLM to write a reusable
+    parser for this domain using the known-good result as the ground truth.
+
+    This is the fallback path for models that cannot do tool-use, so we keep
+    the prompt dead simple and validate before saving.
+    """
+    from tool_server import save_parser as _save_parser, _safe_domain
+
+    title   = known.get("title", "")
+    company = known.get("company", "")
+    if not title or not _looks_valid_title(title, domain):
+        return  # not worth saving a parser for bad data
+
+    system = (
+        "You are a Python code generator. Write a function called `extract(page_text: str) -> dict` "
+        "that parses job listing pages from the domain and returns a dict with keys: "
+        "title, company, description, location.\n\n"
+        "Rules:\n"
+        "- Use only the Python standard library (re, html, json — no third-party packages).\n"
+        "- Look for the specific patterns visible in the sample page text.\n"
+        "- Return empty strings for any field not found.\n"
+        "- Output ONLY the Python function, no imports outside the function, no explanation.\n"
+        "- Start your response with `def extract(page_text: str) -> dict:`\n\n"
+        f"Domain: {domain}\n"
+        f"Known-good result for validation:\n"
+        f"  title   = {title!r}\n"
+        f"  company = {company!r}\n"
+    )
+    user = f"Sample page text:\n\n{page_text[:8000]}"
+
+    try:
+        code = ai.generate(system, user).strip()
+        if code.startswith("```"):
+            code = code.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        if "def extract(" not in code:
+            _log.warning("[bootstrap] LLM did not produce a valid extract() function for %s", domain)
+            return
+
+        # Validate: run the generated parser against the same page_text
+        from tool_server import run_parser as _run_parser
+        result = _run_parser(code=code, text=page_text)
+        parsed_title = result.get("title", "")
+        if not _looks_valid_title(parsed_title, domain):
+            _log.warning("[bootstrap] generated parser returned bad title %r for %s — not saving",
+                         parsed_title, domain)
+            return
+
+        save_result = _save_parser(domain=domain, code=code)
+        _log.info("[bootstrap] saved parser for %s via one-shot bootstrap: %s", domain, save_result)
+    except Exception as exc:
+        _log.warning("[bootstrap] parser bootstrap failed for %s: %s", domain, exc)
+

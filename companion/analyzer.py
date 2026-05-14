@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import urllib.parse
 from typing import TYPE_CHECKING
 
 import httpx
@@ -255,32 +256,105 @@ def _fetch_text(domain: str) -> str:
     return "\n\n".join(parts)[:8000]
 
 
-def _resolve_company_domain(company_name: str) -> str | None:
-    """Try to find the company's own website domain from the company name.
+def _resolve_company_domain(company_name: str,
+                            ai: "AIClient | None" = None) -> str | None:
+    """Find the company's official website domain.
 
-    Tries common TLD suffixes in order; returns the first that resolves and
-    returns a non-error HTTP response. Returns None if none work.
+    Strategy:
+      1. LLM knowledge base — fast, no rate-limiting, knows non-obvious domains
+         like halterhq.com for a company named "Halter"
+      2. Wikipedia OpenSearch + extlinks — structured, reliable for known orgs
+      3. TLD-guessing with content verification — verifies each candidate page
+         actually mentions the company name (guards against halter.com →
+         HFG Capital instead of Halter NZ)
+
+    Returns the bare hostname of the final redirect URL, or None if not found.
     """
+    if not company_name.strip():
+        return None
+
+    # Keywords for content verification (significant words, >3 chars)
+    keywords = [w for w in re.sub(r"[^a-z0-9\s]", "", company_name.lower()).split()
+                if len(w) > 3]
+
+    def _content_matches(resp: httpx.Response) -> bool:
+        if not keywords:
+            return True
+        text = re.sub(r"<[^>]+>", " ", resp.text[:5000]).lower()
+        return any(kw in text for kw in keywords)
+
+    def _verify(host: str) -> str | None:
+        """Fetch host, verify content, return final redirect hostname or None."""
+        try:
+            host = _safe_domain(host)
+            if not host or _JOB_BOARDS.search(host) or "wikipedia" in host:
+                return None
+            with httpx.Client(timeout=5, follow_redirects=True, headers=_HEADERS) as c:
+                vr = c.get(f"https://{host}/")
+                if vr.status_code < 400 and _content_matches(vr):
+                    return _safe_domain(str(vr.url).split("/")[2])
+        except Exception:
+            pass
+        return None
+
+    # --- Strategy 1: LLM knowledge base ---
+    if ai is not None:
+        try:
+            raw = ai.generate(
+                "You are a company domain lookup tool. "
+                "Reply with ONLY the bare domain name (e.g. stripe.com or halterhq.com). "
+                "No protocol, no path, no explanation. "
+                "If you are not confident, reply with the single word: unknown",
+                f"What is the official website domain for this company: {company_name}",
+            ).strip().lower()
+            raw = re.sub(r"^https?://", "", raw).split("/")[0].strip(".")
+            if raw and raw != "unknown" and re.match(r"^[a-z0-9][a-z0-9.\-]+\.[a-z]{2,}$", raw):
+                result = _verify(raw)
+                if result:
+                    return result
+        except Exception:
+            pass
+
+    # --- Strategy 2: Wikipedia OpenSearch ---
+    try:
+        r = httpx.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={"action": "opensearch", "search": company_name,
+                    "limit": "3", "format": "json"},
+            timeout=6, headers=_HEADERS,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            for wiki_url in (data[3] if len(data) > 3 else [])[:3]:
+                page_r = httpx.get(
+                    "https://en.wikipedia.org/w/api.php",
+                    params={
+                        "action": "query",
+                        "titles": urllib.parse.urlparse(wiki_url).path.split("/wiki/")[-1],
+                        "prop": "extlinks", "ellimit": "20", "format": "json",
+                    },
+                    timeout=6, headers=_HEADERS,
+                )
+                if page_r.status_code != 200:
+                    continue
+                for page in page_r.json().get("query", {}).get("pages", {}).values():
+                    for link in page.get("extlinks", []):
+                        host = urllib.parse.urlparse(link.get("*", "")).netloc
+                        result = _verify(host)
+                        if result:
+                            return result
+    except Exception:
+        pass
+
+    # --- Strategy 3: TLD-guessing with content verification ---
     slug = re.sub(r"[^a-z0-9]+", "", company_name.lower())
     if not slug:
         return None
-    candidates = [
-        f"{slug}.com",
-        f"{slug}.io",
-        f"{slug}.co",
-        f"{slug}.co.nz",
-        f"{slug}.com.au",
-        f"{slug}.ai",
-        f"{slug}.tech",
-    ]
-    with httpx.Client(timeout=5, follow_redirects=True, headers=_HEADERS) as client:
-        for domain in candidates:
-            try:
-                resp = client.get(f"https://{domain}/")
-                if resp.status_code < 400:
-                    return domain
-            except Exception:
-                continue
+    for domain in [f"{slug}.com", f"{slug}.io", f"{slug}.co",
+                   f"{slug}.co.nz", f"{slug}.com.au", f"{slug}.ai", f"{slug}.tech"]:
+        result = _verify(domain)
+        if result:
+            return result
     return None
 
 
@@ -301,7 +375,7 @@ def research_company(domain: str, company_name: str, ai: "AIClient") -> dict:
     except ValueError:
         clean = ""
     if clean and _JOB_BOARDS.search(clean):
-        found = _resolve_company_domain(company_name)
+        found = _resolve_company_domain(company_name, ai=ai)
         if found:
             resolved = found
 

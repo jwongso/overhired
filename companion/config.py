@@ -218,6 +218,57 @@ def get_setup_warnings(cfg: dict[str, Any]) -> list[str]:
     return warnings
 
 
+def profile_needs_population(cfg: dict[str, Any]) -> bool:
+    """True when resume is set but core profile fields are still empty."""
+    resume_ok = bool(cfg.get("resume", {}).get("path", "").strip())
+    profile = cfg.get("profile", {})
+    core_empty = not all(profile.get(k, "").strip() for k in ("name", "email", "phone"))
+    return resume_ok and core_empty
+
+
+def patch_profile_in_toml(updates: dict[str, str]) -> None:
+    """Write extracted profile values into the [profile] section of config.toml.
+
+    Only overwrites keys whose current value is empty ("").
+    Preserves all comments and formatting.
+    """
+    path = _config_path()
+    if not path.exists():
+        return
+
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    in_profile = False
+    result: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        # Track which TOML section we're in
+        if stripped.startswith("["):
+            in_profile = stripped == "[profile]"
+            result.append(line)
+            continue
+
+        if in_profile and "=" in stripped and not stripped.startswith("#"):
+            key = stripped.split("=", 1)[0].strip()
+            if key in updates:
+                val_part = stripped.split("=", 1)[1].strip()
+                # Extract just the value token (ignore trailing inline comment)
+                # e.g. '"" # comment' -> '""'
+                import re as _re
+                val_token = _re.split(r'\s+#', val_part, maxsplit=1)[0].strip()
+                if val_token in ('""', "''"):
+                    indent  = line[: len(line) - len(line.lstrip())]
+                    # Preserve the inline comment if present
+                    comment_match = _re.search(r'\s+#.*', val_part)
+                    comment = comment_match.group() if comment_match else ""
+                    result.append(f'{indent}{key} = "{updates[key]}"{comment}\n')
+                    continue
+
+        result.append(line)
+
+    path.write_text("".join(result), encoding="utf-8")
+
+
 def load_resume_text(cfg: dict[str, Any]) -> str:
     """Read resume text from the configured path.
 

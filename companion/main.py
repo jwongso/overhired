@@ -232,6 +232,58 @@ def _bg_write_summary(dest: Path, domain: str, company: str) -> None:
         logger.warning("[analysis] summary.md failed: %s", exc)
 
 
+def _populate_profile_from_resume() -> None:
+    """Extract profile fields from the resume PDF and patch config.toml.
+
+    Called once at startup when a resume path is configured but profile
+    fields (name/email/phone) are still empty. Runs synchronously before
+    uvicorn starts so the in-memory CFG is updated before any requests arrive.
+    """
+    resume_text = cfg_module.load_resume_text(CFG)
+    if not resume_text:
+        logger.warning("[profile] resume text is empty — cannot auto-populate profile")
+        return
+
+    print("  Extracting profile from resume (one-time setup)...", flush=True)
+    system = (
+        "You are a resume parser. Extract contact and profile information "
+        "from the resume text below. Return ONLY valid JSON with these exact keys:\n"
+        '  name, email, phone, linkedin, github, website, location, '
+        'work_authorization, availability, salary_expectation\n'
+        "Use empty string \"\" for any field not found. "
+        "location = city + country (e.g. \"Auckland, New Zealand\"). "
+        "work_authorization = citizenship/visa status if mentioned. "
+        "Do not include any explanation — JSON only."
+    )
+    try:
+        raw = AI.generate(system, resume_text[:6000])
+        # Extract JSON from response (model may wrap in markdown)
+        import re, json as _json
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not m:
+            logger.warning("[profile] LLM returned no JSON: %r", raw[:200])
+            return
+        data: dict = _json.loads(m.group())
+    except Exception as exc:
+        logger.warning("[profile] profile extraction failed: %s", exc)
+        return
+
+    # Only keep string values; drop empty ones so we don't overwrite non-empty fields
+    updates = {k: str(v).strip() for k, v in data.items() if v and str(v).strip()}
+    if not updates:
+        logger.warning("[profile] LLM returned empty profile data")
+        return
+
+    cfg_module.patch_profile_in_toml(updates)
+    # Update in-memory config so this session benefits immediately
+    for k, v in updates.items():
+        CFG.setdefault("profile", {})[k] = v
+
+    filled = ", ".join(f"{k}={repr(v)}" for k, v in updates.items())
+    print(f"  ✅ Profile populated: {filled}", flush=True)
+    logger.info("[profile] auto-populated: %s", filled)
+
+
 def _bg_write_score(dest: Path, job_description: str, resume_text: str, role: str, company: str) -> None:
     logger.info("[analysis] score.md starting for %s @ %s", role, company)
     try:
@@ -746,6 +798,11 @@ def main() -> None:
         print()
         for w in warnings:
             print(f"  ⚠  {w}")
+
+    # Auto-populate profile from resume on first run
+    if cfg_module.profile_needs_population(CFG):
+        _populate_profile_from_resume()
+
     print()
 
     uvicorn.run(

@@ -260,6 +260,9 @@ def health():
     ai_ok, ai_model = AI.health_check()
     ats_filler_module.FILLERS_DIR.mkdir(parents=True, exist_ok=True)
     fillers_cached = sum(1 for _ in ats_filler_module.FILLERS_DIR.glob("*.json"))
+    warnings = cfg_module.get_setup_warnings(CFG)
+    if not ai_ok:
+        warnings.insert(0, f"AI unreachable at {CFG['ai']['endpoint']} — is Ollama running?")
     return {
         "status":         "ok",
         "ai_provider":     CFG["ai"]["provider"],
@@ -268,6 +271,7 @@ def health():
         "ai_reachable":    ai_ok,
         "fillers_cached":  fillers_cached,
         "profile":         CFG.get("profile", {}),
+        "setup_warnings":  warnings,
     }
 
 
@@ -724,18 +728,24 @@ def main() -> None:
         AI = ai_module.AIClient(override)
 
     print(f"\noverhired companion  |  http://{args.host}:{args.port}")
+    print(f"  Config       : {cfg_module._config_path()}")
     print(f"  AI provider  : {CFG['ai']['provider']}  ({CFG['ai']['endpoint']})")
     print(f"  AI model     : {CFG['ai']['model']}")
     print(f"  Output dir   : {CFG['output_dir']}")
     print(f"  Log level    : {args.log_level}")
 
-    # List cached parsers at startup
     from tool_server import list_parsers
     cached = list_parsers()
     if cached["count"]:
         print(f"  Cached parsers ({cached['count']}):", ", ".join(p["domain"] for p in cached["parsers"]))
     else:
         print("  Cached parsers: none (will generate on first scan of each site)")
+
+    warnings = cfg_module.get_setup_warnings(CFG)
+    if warnings:
+        print()
+        for w in warnings:
+            print(f"  ⚠  {w}")
     print()
 
     uvicorn.run(

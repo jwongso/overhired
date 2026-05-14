@@ -192,7 +192,13 @@ function CompanionBanner({ health }) {
     const ai = health.ai_reachable
       ? `${providerLabel}${modelLabel}`
       : `${providerLabel} - not reachable`;
-    return html`<div class="banner ok">Companion running - ${ai}</div>`;
+    const warnings = health.setup_warnings || [];
+    return html`
+      <div class="banner ok">Companion running - ${ai}</div>
+      ${warnings.map(w => html`
+        <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:6px 10px;margin-bottom:6px;font-size:11px;color:#856404;">
+          ⚠ ${w}
+        </div>`)}`;
   }
   const cmd = 'cd companion && python main.py';
   const copy = () => navigator.clipboard.writeText(cmd);

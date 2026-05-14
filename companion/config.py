@@ -110,16 +110,72 @@ def _merge(base: dict, override: dict) -> dict:
 
 # ── Loader ────────────────────────────────────────────────────────────────────
 
+# Written once when no config exists.  All fields are present so the user just
+# edits the values rather than needing to know the schema.
+_DEFAULT_CONFIG_TOML = """\
+# overhired companion configuration
+# Edit this file, then restart the companion (python companion/main.py).
+# Full docs: https://github.com/your-org/overhired
+
+[companion]
+output_dir     = "~/Documents/job-applications"
+companion_port = 7878
+auth_token     = ""   # set a shared secret; copy to extension Settings
+
+[ai]
+provider     = "ollama"            # ollama | openai | anthropic
+endpoint     = "http://localhost:11434"
+model        = "llama3.2"
+api_key      = ""                  # required for openai / anthropic
+timeout      = 180
+tool_timeout = 600
+
+[cover_letter]
+max_words = 450
+language  = "English"
+
+[resume]
+# Path to your resume file (.pdf, .md, or .txt)
+path = ""
+
+[profile]
+name               = ""
+email              = ""
+phone              = ""
+linkedin           = ""   # e.g. https://linkedin.com/in/yourname
+github             = ""
+website            = ""
+location           = ""   # e.g. Auckland, New Zealand
+work_authorization = ""   # e.g. NZ citizen / requires visa sponsorship
+availability       = ""   # e.g. 2 weeks notice
+salary_expectation = ""
+"""
+
+
+def write_default_config() -> Path:
+    """Write the default config template if none exists. Returns the path."""
+    path = _config_path()
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_DEFAULT_CONFIG_TOML, encoding="utf-8")
+        print(f"[overhired] Created default config at {path}", file=sys.stderr)
+        print(f"[overhired] Please edit {path} and restart.", file=sys.stderr)
+    return path
+
+
 def load() -> dict[str, Any]:
     """Load config from disk, merging over defaults.
 
-    Returns a fully-populated config dict. Never raises — missing or
-    malformed config files fall back to defaults with a warning printed.
+    Creates a default config.toml on first run if none exists.
+    Never raises — missing or malformed files fall back to defaults.
     """
     cfg = dict(DEFAULTS)
     path = _config_path()
 
     if not path.exists():
+        write_default_config()
+        # Return defaults; user needs to edit and restart
+        cfg["output_dir"] = str(Path(cfg["output_dir"]).expanduser())
         return cfg
 
     if tomllib is None:
@@ -128,6 +184,7 @@ def load() -> dict[str, Any]:
             "install 'tomli' (pip install tomli) for Python < 3.11.",
             file=sys.stderr,
         )
+        cfg["output_dir"] = str(Path(cfg["output_dir"]).expanduser())
         return cfg
 
     try:
@@ -137,9 +194,28 @@ def load() -> dict[str, Any]:
     except Exception as exc:
         print(f"[overhired] WARNING: could not parse {path}: {exc}", file=sys.stderr)
 
-    # Expand ~ in output_dir
     cfg["output_dir"] = str(Path(cfg["output_dir"]).expanduser())
     return cfg
+
+
+def get_setup_warnings(cfg: dict[str, Any]) -> list[str]:
+    """Return human-readable warnings about incomplete configuration."""
+    warnings: list[str] = []
+
+    resume_path = cfg.get("resume", {}).get("path", "").strip()
+    if not resume_path:
+        warnings.append("Resume path not set — cover letter generation will fail. "
+                        "Set [resume] path in config.toml.")
+    elif not Path(resume_path).expanduser().exists():
+        warnings.append(f"Resume file not found: {resume_path}")
+
+    profile = cfg.get("profile", {})
+    missing = [k for k in ("name", "email", "phone") if not profile.get(k, "").strip()]
+    if missing:
+        warnings.append(f"Profile incomplete — missing: {', '.join(missing)}. "
+                        "ATS form fill will be partial.")
+
+    return warnings
 
 
 def load_resume_text(cfg: dict[str, Any]) -> str:

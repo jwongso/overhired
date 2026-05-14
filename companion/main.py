@@ -246,14 +246,20 @@ def _populate_profile_from_resume() -> None:
 
     print("  Extracting profile from resume (one-time setup)...", flush=True)
     system = (
-        "You are a resume parser. Extract contact and profile information "
-        "from the resume text below. Return ONLY valid JSON with these exact keys:\n"
+        "You are a resume parser. Extract ONLY explicitly stated contact and profile "
+        "information from the resume text. Do NOT infer, guess, or construct any value "
+        "that is not literally present in the text.\n\n"
+        "Return ONLY valid JSON with these exact keys:\n"
         '  name, email, phone, linkedin, github, website, location, '
-        'work_authorization, availability, salary_expectation\n'
-        "Use empty string \"\" for any field not found. "
-        "location = city + country (e.g. \"Auckland, New Zealand\"). "
-        "work_authorization = citizenship/visa status if mentioned. "
-        "Do not include any explanation — JSON only."
+        'work_authorization, availability, salary_expectation\n\n'
+        "Rules:\n"
+        "- Use \"\" for any field not explicitly found in the text.\n"
+        "- linkedin/github/website: only include if a URL or handle is literally written.\n"
+        "- work_authorization: only include if the resume explicitly states citizenship, "
+        "visa status, or right-to-work (e.g. 'Open Work Visa', 'PR', 'requires sponsorship'). "
+        "Never assume citizenship from a name or location.\n"
+        "- location: city/country only if stated (e.g. 'Auckland, New Zealand').\n"
+        "- Do not include any explanation — JSON only."
     )
     try:
         raw = AI.generate(system, resume_text[:6000])

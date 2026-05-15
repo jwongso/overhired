@@ -1,5 +1,5 @@
 /**
- * overhired — service worker (MV3 background)
+ * grapply — service worker (MV3 background)
  *
  * Intentionally minimal. Only two jobs:
  *

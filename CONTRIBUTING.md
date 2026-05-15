@@ -1,4 +1,4 @@
-# Contributing to overhired
+# Contributing to grapply
 
 Thank you for wanting to help! Contributions of all kinds are welcome.
 

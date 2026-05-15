@@ -1,5 +1,5 @@
 /**
- * overhired — Lever ATS form filler
+ * grapply — Lever ATS form filler
  * Matches: jobs.lever.co
  *
  * Lever's apply page is a React SPA with a clean, consistent structure:
@@ -7,14 +7,14 @@
  *   - Social/URL fields with placeholder text
  *   - A single "Additional Information" or cover letter textarea
  *
- * Classic content script — registers handler on window.__overhiredATS.lever
+ * Classic content script — registers handler on window.__grapplyATS.lever
  */
 (function () {
   'use strict';
 
-  if (!window.__overhiredCommon) { console.error('[overhired] common.js must load before lever.js'); return; }
+  if (!window.__grapplyCommon) { console.error('[grapply] common.js must load before lever.js'); return; }
 
-  const { setValue, waitFor, fillCoverLetterTextarea } = window.__overhiredCommon;
+  const { setValue, waitFor, fillCoverLetterTextarea } = window.__grapplyCommon;
 
   async function fill(profile, coverLetter) {
     // Lever renders the form on page load — no heavy SPA delay, but wait briefly.
@@ -61,5 +61,5 @@
     if (el) setValue(el, value);
   }
 
-  window.__overhiredATS.lever = fill;
+  window.__grapplyATS.lever = fill;
 })();

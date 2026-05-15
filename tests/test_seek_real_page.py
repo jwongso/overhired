@@ -4,10 +4,10 @@ Integration test: extract job info from a real live SEEK page.
 Fetches https://nz.seek.com/job/91936975 directly, then runs the full
 extract pipeline (LLM call included).
 
-On success, saves nz.seek.com.py parser to ~/.overhired/parsers/.
+On success, saves nz.seek.com.py parser to ~/.grapply/parsers/.
 
 Run:
-    cd overhired && pytest tests/test_seek_real_page.py -v -s
+    cd grapply && pytest tests/test_seek_real_page.py -v -s
 """
 import sys
 import urllib.request
@@ -22,7 +22,7 @@ import tool_server
 
 SEEK_URL = "https://nz.seek.com/job/91936975?type=standard&ref=search-standalone&origin=cardTitle"
 DOMAIN = "nz.seek.com"
-PARSERS_DIR = Path("~/.overhired/parsers").expanduser()
+PARSERS_DIR = Path("~/.grapply/parsers").expanduser()
 EXPECTED_TITLE = "Embedded Software Engineer"
 EXPECTED_COMPANY = "Fisher & Paykel Healthcare"
 
@@ -86,7 +86,7 @@ def test_real_seek_page_extract_and_parser(ai_client):
       3. LLM extracts JSON (title / company / location / description)
       4. LLM generates Python parser
       5. Parser passes safety + validation
-      6. Parser saved to ~/.overhired/parsers/nz.seek.com.py
+      6. Parser saved to ~/.grapply/parsers/nz.seek.com.py
       7. Saved parser re-run against same page — must return correct title
     """
     html = _fetch_html()
@@ -111,7 +111,7 @@ def test_real_seek_page_extract_and_parser(ai_client):
     parser_file = PARSERS_DIR / f"{DOMAIN}.py"
     assert parser_file.exists(), (
         f"Parser NOT saved to {parser_file}. "
-        "Check ~/.overhired/companion.log for [save_parser] lines."
+        "Check ~/.grapply/companion.log for [save_parser] lines."
     )
     print(f"[test] ✅ Parser saved: {parser_file}")
     print(f"[test] Parser content:\n{parser_file.read_text()}")

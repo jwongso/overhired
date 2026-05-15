@@ -82,7 +82,7 @@ class TestExtractEndpoint:
                 resp2 = test_client.post(
                     "/extract",
                     json={"domain": "x.com", "page_text": "y"},
-                    headers={"X-Overhired-Token": "secret"},
+                    headers={"X-Grapply-Token": "secret"},
                 )
             assert resp2.status_code == 200
         finally:

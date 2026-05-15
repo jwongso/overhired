@@ -1,5 +1,5 @@
 /**
- * overhired — Workday ATS form filler
+ * grapply — Workday ATS form filler
  * Matches: *.myworkdayjobs.com, *.wd1.myworkdayjobs.com, *.wd5.myworkdayjobs.com, etc.
  *
  * Workday Recruiting is a heavy Angular SPA. Key traits:
@@ -8,14 +8,14 @@
  *   - We fill whatever step is currently visible; the user clicks Next between steps.
  *   - Some fields (resume upload, work history entries) are intentionally left for the user.
  *
- * Classic content script — registers handler on window.__overhiredATS.workday
+ * Classic content script — registers handler on window.__grapplyATS.workday
  */
 (function () {
   'use strict';
 
-  if (!window.__overhiredCommon) { console.error('[overhired] common.js must load before workday.js'); return; }
+  if (!window.__grapplyCommon) { console.error('[grapply] common.js must load before workday.js'); return; }
 
-  const { setValue, waitFor, fillCoverLetterTextarea } = window.__overhiredCommon;
+  const { setValue, waitFor, fillCoverLetterTextarea } = window.__grapplyCommon;
 
   async function fill(profile, coverLetter) {
     // Wait for Workday Angular to hydrate the form.
@@ -95,5 +95,5 @@
     if (el) setValue(el, value);
   }
 
-  window.__overhiredATS.workday = fill;
+  window.__grapplyATS.workday = fill;
 })();

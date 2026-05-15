@@ -1,18 +1,18 @@
 /**
- * overhired — Greenhouse ATS form filler
+ * grapply — Greenhouse ATS form filler
  * Matches: boards.greenhouse.io, *.greenhouse.io/applications
  *
  * Greenhouse uses a clean, stable DOM with data-field attributes.
  * Most fields are standard <input> or <select> elements.
  *
- * Classic content script — registers handler on window.__overhiredATS.greenhouse
+ * Classic content script — registers handler on window.__grapplyATS.greenhouse
  */
 (function () {
   'use strict';
 
-  if (!window.__overhiredCommon) { console.error('[overhired] common.js must load before greenhouse.js'); return; }
+  if (!window.__grapplyCommon) { console.error('[grapply] common.js must load before greenhouse.js'); return; }
 
-  const { setValue, waitFor, fillCoverLetterTextarea } = window.__overhiredCommon;
+  const { setValue, waitFor, fillCoverLetterTextarea } = window.__grapplyCommon;
 
   async function fill(profile, coverLetter) {
     const fields = {
@@ -52,5 +52,5 @@
     }
   }
 
-  window.__overhiredATS.greenhouse = fill;
+  window.__grapplyATS.greenhouse = fill;
 })();

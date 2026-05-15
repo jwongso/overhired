@@ -164,7 +164,7 @@ class TestGenerate:
         assert "cover_letter_md" in resp.json()
 
     def test_resume_text_fallback_to_companion_cache(self, client):
-        """When popup sends resume_text='', companion loads it from ~/.overhired/resume.txt."""
+        """When popup sends resume_text='', companion loads it from ~/.grapply/resume.txt."""
         import main
         with patch("main.cfg_module.load_resume_text", return_value="cached resume") as load_resume, \
              patch.object(main.AI, "generate", return_value="cover letter"):
@@ -188,7 +188,7 @@ class TestSave:
 
     def test_save_returns_paths_and_job_id(self, client, tmp_path):
         import main
-        original_dir = main.CFG.get("output_dir", "~/overhired-output")
+        original_dir = main.CFG.get("output_dir", "~/grapply-output")
         main.CFG["output_dir"] = str(tmp_path)
         try:
             with patch("main.cfg_module.load_resume_text", return_value=""):
@@ -227,7 +227,7 @@ class TestPollFiles:
         (dest / "cover_letter.md").write_text("# Cover")
         job_id = hashlib.md5(str(dest).encode()).hexdigest()[:12]
 
-        original_dir = main.CFG.get("output_dir", "~/overhired-output")
+        original_dir = main.CFG.get("output_dir", "~/grapply-output")
         main.CFG["output_dir"] = str(tmp_path)
         try:
             resp = client.get(f"/jobs/{job_id}/files")
@@ -241,7 +241,7 @@ class TestPollFiles:
 
     def test_unknown_job_id_returns_404(self, client, tmp_path):
         import main
-        original_dir = main.CFG.get("output_dir", "~/overhired-output")
+        original_dir = main.CFG.get("output_dir", "~/grapply-output")
         main.CFG["output_dir"] = str(tmp_path)
         try:
             resp = client.get("/jobs/nonexistent-000/files")
@@ -333,7 +333,7 @@ class TestDeleteFiller:
 
 class TestAuthEnforcement:
     """Confirm all direct-fetch endpoints enforce the companion token when
-    companion_token is configured — popup.js sends it via X-Overhired-Token."""
+    companion_token is configured — popup.js sends it via X-Grapply-Token."""
 
     @pytest.mark.parametrize("method,path,body", [
         ("GET",  "/health",          None),
@@ -358,7 +358,7 @@ class TestAuthEnforcement:
                 assert resp.status_code == 401
 
             # With correct token — should not be 401
-            headers = {"X-Overhired-Token": "test-secret"}
+            headers = {"X-Grapply-Token": "test-secret"}
             with patch("extractor.detect_mode", return_value="job_posting"), \
                  patch("extractor.extract", return_value={"title": "", "company": "", "description": "", "location": ""}), \
                  patch("main.cfg_module.load_resume_text", return_value="r"), \

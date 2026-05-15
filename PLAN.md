@@ -1,4 +1,4 @@
-# overhired — Project Plan
+# grapply — Project Plan
 
 > A browser extension + local companion service that reads job postings, generates
 > personalized cover letters using AI, and optionally auto-fills ATS application forms.
@@ -67,12 +67,12 @@ Companion Service  (Python + FastAPI)
 |------|---------|
 | `main.py` | FastAPI app, `/generate` and `/save` endpoints |
 | `ai_client.py` | Unified AI interface — OpenAI-compatible + Claude adapter |
-| `config.py` | Load `~/.overhired/config.toml` |
+| `config.py` | Load `~/.grapply/config.toml` |
 | `requirements.txt` | fastapi, uvicorn, anthropic (optional) |
 
 Config file location:
-- Linux/macOS: `~/.overhired/config.toml`
-- Windows: `%APPDATA%\overhired\config.toml`
+- Linux/macOS: `~/.grapply/config.toml`
+- Windows: `%APPDATA%\grapply\config.toml`
 
 ```toml
 # config.toml defaults
@@ -120,7 +120,7 @@ each generation (or optionally persisted per URL). Examples:
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  🧳 overhired                            ⚙️    │
+│  🧳 grapply                            ⚙️    │
 │                                                  │
 │  Senior Software Engineer @ ACME Corp           │
 │  📍 Berlin, Germany  ·  boards.greenhouse.io    │
@@ -312,7 +312,7 @@ AI provider. Everything else stays on your device."
 - [ ] Answer bank for common screening questions
 
 ### v1.2 — Polish
-- [ ] CLI mode: `overhired generate --url <url>` (batch processing)
+- [ ] CLI mode: `grapply generate --url <url>` (batch processing)
 - [ ] Companion as system tray app / auto-start on login
 - [ ] Companion packaged as single binary (PyInstaller) for non-devs
 
@@ -321,7 +321,7 @@ AI provider. Everything else stays on your device."
 ## Repository Structure
 
 ```
-overhired/                         ← repo root
+grapply/                         ← repo root
 ├── extension/
 │   ├── manifest.json
 │   ├── popup/
@@ -387,7 +387,7 @@ overhired/                         ← repo root
 
 ## Open Questions (decide before starting implementation)
 
-1. **Project name** — ✅ `overhired`
+1. **Project name** — ✅ `grapply`
 2. **Extension UI framework** — ✅ **Preact** — better component model for settings
    form, still tiny (~3 KB), no full React overhead.
 3. **Companion startup UX** — ✅ **Yes** — extension pings `localhost:7878/health`
@@ -417,6 +417,6 @@ overhired/                         ← repo root
 | Markdown → HTML | `marked.js` (already needed for popup preview) |
 | Companion | Python + FastAPI |
 | AI client | OpenAI-compatible + Claude adapter |
-| Config | TOML (`~/.overhired/config.toml`) |
+| Config | TOML (`~/.grapply/config.toml`) |
 | Address model | Universal: Street / City / State-Province / PostalCode / Country |
 | License | MIT |

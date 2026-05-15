@@ -1,18 +1,18 @@
 /**
- * overhired — Workable ATS form filler
+ * grapply — Workable ATS form filler
  * Matches: apply.workable.com
  *
  * Workable uses a multi-step form. Fields are identified by name attributes.
  * Some steps load asynchronously — we use waitFor() for reliability.
  *
- * Classic content script — registers handler on window.__overhiredATS.workable
+ * Classic content script — registers handler on window.__grapplyATS.workable
  */
 (function () {
   'use strict';
 
-  if (!window.__overhiredCommon) { console.error('[overhired] common.js must load before workable.js'); return; }
+  if (!window.__grapplyCommon) { console.error('[grapply] common.js must load before workable.js'); return; }
 
-  const { setValue, waitFor, fillCoverLetterTextarea } = window.__overhiredCommon;
+  const { setValue, waitFor, fillCoverLetterTextarea } = window.__grapplyCommon;
 
   async function fill(profile, coverLetter) {
     await waitFor(() => document.querySelector('form input'), 5000).catch(() => null);
@@ -53,5 +53,5 @@
     if (el) setValue(el, value);
   }
 
-  window.__overhiredATS.workable = fill;
+  window.__grapplyATS.workable = fill;
 })();

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * overhired — MuPDF WASM setup helper
+ * grapply — MuPDF WASM setup helper
  *
  * Run this once after cloning to download the WASM files:
  *   node setup.js

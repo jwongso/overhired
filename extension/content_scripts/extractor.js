@@ -1,5 +1,5 @@
 /**
- * overhired — content script: job info extractor + ATS form filler
+ * grapply — content script: job info extractor + ATS form filler
  *
  * Injected into all pages. Listens for messages from the popup/service worker:
  *   GET_JOB_INFO  → scrape job title, company, description from current page
@@ -10,8 +10,8 @@
   'use strict';
 
   // Guard against double-injection
-  if (window.__overhired_injected) return;
-  window.__overhired_injected = true;
+  if (window.__grapply_injected) return;
+  window.__grapply_injected = true;
 
   // ── ATS detection ─────────────────────────────────────────────────────────
 
@@ -163,7 +163,7 @@
     const stored = await chrome.storage.local.get(['user_profile']).catch(() => ({}));
     const profile = stored?.user_profile || {};
 
-    const handlers = window.__overhiredATS || {};
+    const handlers = window.__grapplyATS || {};
     const fill = handlers[ats] || handlers.generic;
     if (fill) {
       await fill(profile, coverLetter);

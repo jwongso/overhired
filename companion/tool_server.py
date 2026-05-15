@@ -1,12 +1,12 @@
 """
-overhired — parser tool server
+grapply — parser tool server
 
 Plain Python tool functions exposed to the LLM via OpenAI-compatible tool calling.
 No MCP SDK required — tools are called directly by the agentic loop in ai_client.py.
 
 Tools:
   run_parser    - exec a Python extract(text) function against page text
-  save_parser   - write a parser to ~/.overhired/parsers/{domain}.py
+  save_parser   - write a parser to ~/.grapply/parsers/{domain}.py
   read_parser   - read an existing cached parser
   list_parsers  - list all cached parsers with metadata
   delete_parser - force regeneration by removing a cached parser
@@ -20,7 +20,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-PARSERS_DIR = Path("~/.overhired/parsers").expanduser()
+PARSERS_DIR = Path("~/.grapply/parsers").expanduser()
 
 # ── OpenAI-format tool definitions sent to the LLM ───────────────────────────
 
@@ -175,7 +175,7 @@ def run_parser(code: str, text: str) -> dict:
 
 
 def save_parser(domain: str, code: str) -> dict:
-    """Write a parser to ~/.overhired/parsers/{domain}.py."""
+    """Write a parser to ~/.grapply/parsers/{domain}.py."""
     PARSERS_DIR.mkdir(parents=True, exist_ok=True)
     safe_domain = _safe_domain(domain)
     path = PARSERS_DIR / f"{safe_domain}.py"

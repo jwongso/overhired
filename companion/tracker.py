@@ -1,7 +1,7 @@
 """
-overhired — application tracker
+grapply — application tracker
 
-Persistent SQLite store at ~/.overhired/applications.db.
+Persistent SQLite store at ~/.grapply/applications.db.
 Tracks every job application with status lifecycle and notes.
 
 Statuses: applied → interviewing → offered → accepted | rejected | ghosted | withdrawn
@@ -15,7 +15,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-DB_PATH = Path("~/.overhired/applications.db").expanduser()
+DB_PATH = Path("~/.grapply/applications.db").expanduser()
 
 VALID_STATUSES = {
     "applied", "interviewing", "offered",
@@ -80,7 +80,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if current > _SCHEMA_VERSION:
         raise RuntimeError(
             f"DB schema v{current} is newer than this code (v{_SCHEMA_VERSION}). "
-            "Please update overhired."
+            "Please update grapply."
         )
     for v in range(current, _SCHEMA_VERSION):
         sql = _MIGRATIONS.get(v)

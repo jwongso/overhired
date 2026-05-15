@@ -1,5 +1,5 @@
 """
-overhired — adaptive job extraction orchestrator
+grapply — adaptive job extraction orchestrator
 
 Flow:
   1. Cache hit  → run cached parser immediately (no LLM, <10ms)

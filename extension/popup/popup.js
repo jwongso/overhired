@@ -1,5 +1,5 @@
 /**
- * overhired - popup UI (Preact + htm, no build step)
+ * grapply - popup UI (Preact + htm, no build step)
  */
 import { h, render }       from '../vendor/preact.module.js';
 import { useState, useEffect, useCallback, useRef } from '../vendor/preact-hooks.module.js';
@@ -8,7 +8,7 @@ import htm                 from '../vendor/htm.module.js';
 
 const html = htm.bind(h);
 
-const AUSPICE_URL = 'https://fengshui.overhired.work';
+const AUSPICE_URL = 'https://fengshui.grapply.work';
 
 async function fetchAuspice() {
   // Use local date strings (en-CA locale gives YYYY-MM-DD) so timezone is correct.
@@ -104,7 +104,7 @@ function companionUrl(s) {
 }
 function companionHeaders(s) {
   const h = { 'Content-Type': 'application/json' };
-  if (s?.companion_token) h['X-Overhired-Token'] = s.companion_token;
+  if (s?.companion_token) h['X-Grapply-Token'] = s.companion_token;
   return h;
 }
 
@@ -459,7 +459,7 @@ function GenerateTab({ settings, health }) {
           persistSavedJob({ title, company, jobDomain, cover_letter_md: resp.cover_letter_md, savedAt: Date.now() });
         }
         if (saved?.job_id) setJobId(saved.job_id);
-      }).catch(err => console.warn('[overhired] Auto-save failed:', err.message));
+      }).catch(err => console.warn('[grapply] Auto-save failed:', err.message));
     } catch (e) {
       setErrMsg(e.message);
       setStatus('error');
@@ -496,7 +496,7 @@ function GenerateTab({ settings, health }) {
       // Call /fill directly — bypasses the service worker to avoid MV3 idle timeout
       // on long LLM calls (first-time filler generation can take ~2 min).
       const headers = { 'Content-Type': 'application/json' };
-      if (settings?.companion_token) headers['X-Overhired-Token'] = settings.companion_token;
+      if (settings?.companion_token) headers['X-Grapply-Token'] = settings.companion_token;
       const resp = await fetch(`${settings?.companion_url || 'http://localhost:7878'}/fill`, {
         method: 'POST',
         headers,
@@ -683,11 +683,11 @@ function App() {
               const data = await r.json();
               if (data.jobs?.length) {
                 await store({ savedJobs: data.jobs });
-                console.log('[overhired] Seeded', data.jobs.length, 'saved jobs from disk');
+                console.log('[grapply] Seeded', data.jobs.length, 'saved jobs from disk');
               }
             }
           } catch (e) {
-            console.warn('[overhired] Could not seed savedJobs:', e.message);
+            console.warn('[grapply] Could not seed savedJobs:', e.message);
           }
         }
       }

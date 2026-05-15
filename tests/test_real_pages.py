@@ -6,14 +6,14 @@ Each test runs the full pipeline:
   2. clean_html → structured plain text
   3. LLM extracts JSON + generates Python parser
   4. Parser passes safety + validation
-  5. Parser saved to ~/.overhired/parsers/<domain>.py
+  5. Parser saved to ~/.grapply/parsers/<domain>.py
   6. Saved parser re-run against same page — must return correct title
 
 Run:
-    cd overhired && pytest tests/test_real_pages.py -v -s
-    cd overhired && pytest tests/test_real_pages.py -v -s -k seek
-    cd overhired && pytest tests/test_real_pages.py -v -s -k indeed
-    cd overhired && pytest tests/test_real_pages.py -v -s -k linkedin
+    cd grapply && pytest tests/test_real_pages.py -v -s
+    cd grapply && pytest tests/test_real_pages.py -v -s -k seek
+    cd grapply && pytest tests/test_real_pages.py -v -s -k indeed
+    cd grapply && pytest tests/test_real_pages.py -v -s -k linkedin
 """
 import sys
 import urllib.request
@@ -27,7 +27,7 @@ import extractor
 from tool_server import run_parser
 
 REAL_PAGE_DIR = Path(__file__).parent / "real_page"
-PARSERS_DIR   = Path("~/.overhired/parsers").expanduser()
+PARSERS_DIR   = Path("~/.grapply/parsers").expanduser()
 
 # ── Domain configurations ─────────────────────────────────────────────────────
 

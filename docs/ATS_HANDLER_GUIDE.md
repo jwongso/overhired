@@ -107,7 +107,7 @@ export async function fill(profile, coverLetter) {
 1. Load the extension unpacked (or reload it)
 2. Start the companion: `python companion/main.py`
 3. Browse to the ATS application page
-4. Click the overhired icon → **Fill Form**
+4. Click the grapply icon → **Fill Form**
 5. Check that all fields are filled correctly
 6. Submit the PR!
 

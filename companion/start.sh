@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the overhired companion server.
+# Start the grapply companion server.
 # Kills any stale process on port 7878 before starting.
 set -e
 

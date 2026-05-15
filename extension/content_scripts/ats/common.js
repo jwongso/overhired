@@ -1,8 +1,8 @@
 /**
- * overhired — ATS handler shared utilities
+ * grapply — ATS handler shared utilities
  *
  * Classic content script (no ES modules). Exposes helpers on
- * window.__overhiredCommon so subsequent ATS handler scripts can use them.
+ * window.__grapplyCommon so subsequent ATS handler scripts can use them.
  */
 (function () {
   'use strict';
@@ -32,7 +32,7 @@
    */
   function waitFor(fn, timeoutMs = 5000, intervalMs = 200) {
     function _tryFn() {
-      try { return fn(); } catch (e) { console.warn('[overhired] waitFor: fn threw:', e); return null; }
+      try { return fn(); } catch (e) { console.warn('[grapply] waitFor: fn threw:', e); return null; }
     }
     return new Promise((resolve, reject) => {
       const result = _tryFn();
@@ -71,6 +71,6 @@
     return [profile.first_name, profile.last_name].filter(Boolean).join(' ');
   }
 
-  window.__overhiredCommon = { setValue, waitFor, fillCoverLetterTextarea, fullName };
-  window.__overhiredATS    = window.__overhiredATS || {};
+  window.__grapplyCommon = { setValue, waitFor, fillCoverLetterTextarea, fullName };
+  window.__grapplyATS    = window.__grapplyATS || {};
 })();

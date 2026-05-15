@@ -13,7 +13,7 @@ from tool_server import _safe_domain
 if TYPE_CHECKING:
     from ai_client import AIClient
 
-FILLERS_DIR = Path("~/.overhired/fillers").expanduser()
+FILLERS_DIR = Path("~/.grapply/fillers").expanduser()
 _log = logging.getLogger(__name__)
 _LAST_CACHE_HIT = False
 _BASE_ALLOWED_VALUE_KEYS = {

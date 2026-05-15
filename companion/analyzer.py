@@ -1,5 +1,5 @@
 """
-overhired — job description analyzer
+grapply — job description analyzer
 
 Three tools:
   1. decode_jargon   — corporate BS → plain truth (curated dict + LLM context)
@@ -198,7 +198,7 @@ def score_job_fit(job_description: str, resume_text: str, ai: "AIClient") -> dic
 
 _FETCH_PATHS = ["/", "/about", "/about-us", "/company", "/careers", "/culture"]
 _HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; overhired-research/1.0)",
+    "User-Agent": "Mozilla/5.0 (compatible; grapply-research/1.0)",
     "Accept": "text/html,application/xhtml+xml",
 }
 

@@ -1,18 +1,18 @@
 /**
- * overhired — Ashby ATS form filler
+ * grapply — Ashby ATS form filler
  * Matches: jobs.ashbyhq.com
  *
  * Ashby is a React SPA. Form fields are rendered dynamically and may not
  * exist yet when the script runs — we use waitFor() via MutationObserver polling.
  *
- * Classic content script — registers handler on window.__overhiredATS.ashby
+ * Classic content script — registers handler on window.__grapplyATS.ashby
  */
 (function () {
   'use strict';
 
-  if (!window.__overhiredCommon) { console.error('[overhired] common.js must load before ashby.js'); return; }
+  if (!window.__grapplyCommon) { console.error('[grapply] common.js must load before ashby.js'); return; }
 
-  const { setValue, waitFor, fillCoverLetterTextarea } = window.__overhiredCommon;
+  const { setValue, waitFor, fillCoverLetterTextarea } = window.__grapplyCommon;
 
   async function fill(profile, coverLetter) {
     await waitFor(() => document.querySelector('input[data-testid], input[aria-label]'), 5000)
@@ -71,5 +71,5 @@
     );
   }
 
-  window.__overhiredATS.ashby = fill;
+  window.__grapplyATS.ashby = fill;
 })();

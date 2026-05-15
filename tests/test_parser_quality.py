@@ -20,7 +20,7 @@ Three phases in a single ordered test:
     Assert: fast (<1 s — cache hit).
 
 Run:
-    cd overhired && pytest tests/test_parser_quality.py -v -s
+    cd grapply && pytest tests/test_parser_quality.py -v -s
 """
 import sys
 import time
@@ -34,7 +34,7 @@ import extractor
 from tool_server import run_parser
 
 REAL_PAGE_DIR = Path(__file__).parent / "real_page"
-PARSERS_DIR   = Path("~/.overhired/parsers").expanduser()
+PARSERS_DIR   = Path("~/.grapply/parsers").expanduser()
 
 # ── Per-domain, two-page configuration ───────────────────────────────────────
 

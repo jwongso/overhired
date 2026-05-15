@@ -1,5 +1,5 @@
 /**
- * overhired — SmartRecruiters ATS form filler
+ * grapply — SmartRecruiters ATS form filler
  * Matches: jobs.smartrecruiters.com
  *
  * SmartRecruiters uses an Angular SPA with a multi-step application wizard.
@@ -7,14 +7,14 @@
  * Each step loads independently — we fill what is currently rendered and let
  * the user advance steps manually.
  *
- * Classic content script — registers handler on window.__overhiredATS.smartrecruiters
+ * Classic content script — registers handler on window.__grapplyATS.smartrecruiters
  */
 (function () {
   'use strict';
 
-  if (!window.__overhiredCommon) { console.error('[overhired] common.js must load before smartrecruiters.js'); return; }
+  if (!window.__grapplyCommon) { console.error('[grapply] common.js must load before smartrecruiters.js'); return; }
 
-  const { setValue, waitFor, fillCoverLetterTextarea } = window.__overhiredCommon;
+  const { setValue, waitFor, fillCoverLetterTextarea } = window.__grapplyCommon;
 
   async function fill(profile, coverLetter) {
     // Wait for the Angular form to render.
@@ -106,5 +106,5 @@
     if (el && !el.value) setValue(el, value);
   }
 
-  window.__overhiredATS.smartrecruiters = fill;
+  window.__grapplyATS.smartrecruiters = fill;
 })();

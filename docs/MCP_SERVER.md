@@ -15,7 +15,7 @@ MCP Client (Claude Desktop / Cursor / MCP Inspector)
       │  JSON-RPC over stdio
       │
       ▼
-mcp_server.py  ──► tool_server.py  ──► ~/.overhired/parsers/
+mcp_server.py  ──► tool_server.py  ──► ~/.grapply/parsers/
 ```
 
 The server is **stateless** — safe to spawn per-session or keep alive.
@@ -25,7 +25,7 @@ The server is **stateless** — safe to spawn per-session or keep alive.
 | Tool | Description |
 |---|---|
 | `run_parser(code, text)` | Run a `def extract(text)` function against page text in a sandbox |
-| `save_parser(domain, code)` | Cache the parser to `~/.overhired/parsers/{domain}.py` |
+| `save_parser(domain, code)` | Cache the parser to `~/.grapply/parsers/{domain}.py` |
 | `read_parser(domain)` | Read an existing cached parser's source |
 | `list_parsers()` | List all cached parsers with size and modified date |
 | `delete_parser(domain)` | Remove a cached parser to force regeneration |
@@ -58,9 +58,9 @@ or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 ```json
 {
   "mcpServers": {
-    "overhired-parser-tools": {
+    "grapply-parser-tools": {
       "command": "python",
-      "args": ["/absolute/path/to/overhired/companion/mcp_server.py"]
+      "args": ["/absolute/path/to/grapply/companion/mcp_server.py"]
     }
   }
 }
@@ -78,9 +78,9 @@ Add to `.cursor/mcp.json` in your project (or `~/.cursor/mcp.json` globally):
 ```json
 {
   "mcpServers": {
-    "overhired-parser-tools": {
+    "grapply-parser-tools": {
       "command": "python",
-      "args": ["/absolute/path/to/overhired/companion/mcp_server.py"]
+      "args": ["/absolute/path/to/grapply/companion/mcp_server.py"]
     }
   }
 }
@@ -93,7 +93,7 @@ Add to `.vscode/mcp.json`:
 ```json
 {
   "servers": {
-    "overhired-parser-tools": {
+    "grapply-parser-tools": {
       "type": "stdio",
       "command": "python",
       "args": ["${workspaceFolder}/companion/mcp_server.py"]
@@ -124,7 +124,7 @@ All messages are newline-delimited JSON-RPC 2.0 on stdin/stdout. The server writ
 | Client | Companion's `ai_client.generate_with_tools()` | Any MCP client |
 | Transport | In-process | Subprocess |
 | Discoverability | Hardcoded in companion | Standard `tools/list` |
-| Reusability | Overhired only | Any MCP-compatible tool |
+| Reusability | Grapply only | Any MCP-compatible tool |
 
 Both use the same underlying tool implementations from `tool_server.py`.
 
@@ -141,7 +141,7 @@ Both use the same underlying tool implementations from `tool_server.py`.
 { "title": "Senior Engineer", "company": "Acme Corp", "description": "", "location": "" }
 
 > save_parser(domain="acme.com", code="def extract(text):\n    ...")
-{ "saved": "/home/you/.overhired/parsers/acme.com.py" }
+{ "saved": "/home/you/.grapply/parsers/acme.com.py" }
 
 > list_parsers()
 { "parsers": [{ "domain": "acme.com", "bytes": 312, "modified": "2026-05-13" }], "count": 1 }

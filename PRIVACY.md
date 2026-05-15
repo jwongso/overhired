@@ -1,6 +1,6 @@
 # Privacy Policy
 
-overhired is designed to keep your personal data on your device.
+grapply is designed to keep your personal data on your device.
 
 ## What stays local (never leaves your machine)
 
@@ -34,4 +34,4 @@ the AI endpoint you configure.
 
 ## No telemetry
 
-overhired collects zero usage data, crash reports, or analytics of any kind.
+grapply collects zero usage data, crash reports, or analytics of any kind.

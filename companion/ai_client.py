@@ -1,5 +1,5 @@
 """
-overhired — unified AI client
+grapply — unified AI client
 
 Supports:
   - ollama     : OpenAI-compatible endpoint (default: localhost:11434)

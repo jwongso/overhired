@@ -1,5 +1,5 @@
 /**
- * overhired — MuPDF WASM wrapper
+ * grapply — MuPDF WASM wrapper
  *
  * Loaded lazily by the service worker on first PDF parse request.
  * Exports a single function: extractText(pdfBytes: Uint8Array) -> string

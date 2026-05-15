@@ -1,5 +1,5 @@
 /**
- * overhired — SAP SuccessFactors ATS form filler
+ * grapply — SAP SuccessFactors ATS form filler
  * Matches: *.successfactors.com, *.sapsf.com, *.successfactors.eu
  *
  * SuccessFactors Recruiting is an Angular SPA. Fields are identified by:
@@ -9,14 +9,14 @@
  * The apply flow is typically multi-step (General Info → Resume → Questions →
  * Review). We fill whatever is visible; the user clicks Next between steps.
  *
- * Classic content script — registers handler on window.__overhiredATS.successfactors
+ * Classic content script — registers handler on window.__grapplyATS.successfactors
  */
 (function () {
   'use strict';
 
-  if (!window.__overhiredCommon) { console.error('[overhired] common.js must load before successfactors.js'); return; }
+  if (!window.__grapplyCommon) { console.error('[grapply] common.js must load before successfactors.js'); return; }
 
-  const { setValue, waitFor, fillCoverLetterTextarea } = window.__overhiredCommon;
+  const { setValue, waitFor, fillCoverLetterTextarea } = window.__grapplyCommon;
 
   async function fill(profile, coverLetter) {
     // Wait for the Angular form to bootstrap.
@@ -116,5 +116,5 @@
     return null;
   }
 
-  window.__overhiredATS.successfactors = fill;
+  window.__grapplyATS.successfactors = fill;
 })();

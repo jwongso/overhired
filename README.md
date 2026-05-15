@@ -1,8 +1,8 @@
-# overhired
+# grapply
 
 > The luxury problem of too many offers.
 
-**overhired** is a browser extension + local companion service that reads any job posting, generates a personalized cover letter using your local AI, and produces a full analysis package — cover letter, job fit score, company summary, and jargon decoder — saved to disk automatically.
+**grapply** is a browser extension + local companion service that reads any job posting, generates a personalized cover letter using your local AI, and produces a full analysis package — cover letter, job fit score, company summary, and jargon decoder — saved to disk automatically.
 
 ---
 
@@ -23,7 +23,7 @@
 
 ## Quick Start
 
-### 1 — Configure `~/.overhired/config.toml`
+### 1 — Configure `~/.grapply/config.toml`
 
 ```toml
 output_dir     = "~/Documents/job-applications"
@@ -44,7 +44,7 @@ path = "~/Documents/my-resume.pdf"   # PDF, MD or TXT
 ### 2 — Start companion
 
 ```bash
-cd overhired/companion
+cd grapply/companion
 pip install -r requirements.txt
 ./start.sh          # kills nothing if already running; starts fresh otherwise
 # or manually:
@@ -56,14 +56,14 @@ pip install -r requirements.txt
 1. Open `chrome://extensions`
 2. Enable **Developer mode**
 3. Click **Load unpacked** → select the `extension/` folder
-4. Pin the overhired icon to your toolbar
+4. Pin the grapply icon to your toolbar
 
 ---
 
 ## How It Works
 
 1. Navigate to any job posting
-2. Click the overhired icon → **Grab Page**
+2. Click the grapply icon → **Grab Page**
 3. Companion extracts job info (instant for SEEK / Indeed / LinkedIn; ~3–10 min LLM call on first visit to an unknown site)
 4. Click **Generate Cover Letter** — companion reads your resume from disk and calls the AI
 5. Cover letter is saved; analysis files are written in the background
@@ -137,7 +137,7 @@ graph TB
             P3["Phase 3 — Validate+Fix\n(LLM C×N)"]
         end
 
-        CACHE["Parser Cache\n~/.overhired/parsers/*.py"]
+        CACHE["Parser Cache\n~/.grapply/parsers/*.py"]
         TRACKER["tracker.py\nStrategy catalog DB"]
         AI_CLI["ai_client.py\nAIClient"]
         ANA["analyzer.py\ninsight / score / summary"]
@@ -151,7 +151,7 @@ graph TB
     subgraph Disk["Disk"]
         OUT["~/Documents/job-applications/\nCompany/Role/\n  cover_letter.md · insight.md\n  score.md · summary.md"]
         RESUME["~/Documents/resume.pdf"]
-        CONFIG["~/.overhired/config.toml"]
+        CONFIG["~/.grapply/config.toml"]
     end
 
     EXT -->|"messages"| SW

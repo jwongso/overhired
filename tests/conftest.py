@@ -1,5 +1,5 @@
 """
-Shared pytest fixtures for overhired companion tests.
+Shared pytest fixtures for grapply companion tests.
 """
 import sys
 from pathlib import Path

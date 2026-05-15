@@ -1,20 +1,20 @@
 /**
- * overhired — Generic ATS handler fallback
+ * grapply — Generic ATS handler fallback
  *
  * Used when no specific ATS handler matches the current URL.
  * Attempts a best-effort fill using common field patterns.
  *
- * Classic content script — registers handler on window.__overhiredATS.generic
+ * Classic content script — registers handler on window.__grapplyATS.generic
  */
 (function () {
   'use strict';
 
-  if (!window.__overhiredCommon) { console.error('[overhired] common.js must load before generic.js'); return; }
+  if (!window.__grapplyCommon) { console.error('[grapply] common.js must load before generic.js'); return; }
 
-  const { setValue, fillCoverLetterTextarea } = window.__overhiredCommon;
+  const { setValue, fillCoverLetterTextarea } = window.__grapplyCommon;
 
   async function fill(profile, coverLetter) {
-    console.log('[overhired] No specific ATS handler — using generic filler');
+    console.log('[grapply] No specific ATS handler — using generic filler');
 
     const map = [
       [/first.?name|fname/i,       profile.name?.split(' ')[0] || profile.first_name || ''],
@@ -45,5 +45,5 @@
     if (coverLetter) fillCoverLetterTextarea(coverLetter);
   }
 
-  window.__overhiredATS.generic = fill;
+  window.__grapplyATS.generic = fill;
 })();

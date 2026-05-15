@@ -1,4 +1,4 @@
-# overhired — Setup Guide
+# grapply — Setup Guide
 
 ## Requirements
 
@@ -20,7 +20,7 @@ python main.py
 # → http://127.0.0.1:7878
 ```
 
-### Optional config at `~/.overhired/config.toml`
+### Optional config at `~/.grapply/config.toml`
 
 ```toml
 [ai]
@@ -67,7 +67,7 @@ This downloads and copies the MuPDF WASM files. Run once after cloning. Requires
 1. Navigate to `chrome://extensions`
 2. Enable **Developer mode** (top-right toggle)
 3. Click **Load unpacked** → select the `extension/` folder
-4. Pin the overhired icon to your toolbar
+4. Pin the grapply icon to your toolbar
 
 ### Firefox
 
@@ -78,7 +78,7 @@ This downloads and copies the MuPDF WASM files. Run once after cloning. Requires
 
 ## 4 — First run
 
-1. Click the overhired icon → **Settings**
+1. Click the grapply icon → **Settings**
 2. Drop your resume PDF — parsed locally via MuPDF WASM; never sent anywhere
 3. Fill in name, email, phone, LinkedIn, address etc.
 4. Choose AI provider (Ollama is the default — free and private)
@@ -99,7 +99,7 @@ auth_token = "your-random-secret"
 **Extension Settings → Companion Token:** paste the same value.
 
 The companion will then reject any request that doesn't carry the
-`X-Overhired-Token` header.
+`X-Grapply-Token` header.
 
 ---
 

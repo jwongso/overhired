@@ -1,9 +1,9 @@
 """
-overhired — companion config loader
+grapply — companion config loader
 
 Config file location:
-  Linux/macOS : ~/.overhired/config.toml
-  Windows     : %APPDATA%\\overhired\\config.toml
+  Linux/macOS : ~/.grapply/config.toml
+  Windows     : %APPDATA%\\grapply\\config.toml
 
 A minimal config.toml (Ollama default):
 
@@ -36,7 +36,7 @@ DEFAULTS: dict[str, Any] = {
     "output_dir": "~/Documents/job-applications",
     "companion_port": 7878,
     # Shared secret token.  If non-empty the companion requires every request
-    # to carry  X-Overhired-Token: <value>.  Copy this value to the extension's
+    # to carry  X-Grapply-Token: <value>.  Copy this value to the extension's
     # Settings → Companion Token field.  Leave empty to disable auth (dev only).
     "auth_token": "",
     "ai": {
@@ -92,7 +92,7 @@ def _config_path() -> Path:
         base = Path(os.environ.get("APPDATA", "~")).expanduser()
     else:
         base = Path("~").expanduser()
-    return base / ".overhired" / "config.toml"
+    return base / ".grapply" / "config.toml"
 
 
 # ── Deep merge helper ─────────────────────────────────────────────────────────
@@ -113,9 +113,9 @@ def _merge(base: dict, override: dict) -> dict:
 # Written once when no config exists.  All fields are present so the user just
 # edits the values rather than needing to know the schema.
 _DEFAULT_CONFIG_TOML = """\
-# overhired companion configuration
+# grapply companion configuration
 # Edit this file, then restart the companion (python companion/main.py).
-# Full docs: https://github.com/your-org/overhired
+# Full docs: https://github.com/your-org/grapply
 
 [companion]
 output_dir     = "~/Documents/job-applications"
@@ -158,8 +158,8 @@ def write_default_config() -> Path:
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(_DEFAULT_CONFIG_TOML, encoding="utf-8")
-        print(f"[overhired] Created default config at {path}", file=sys.stderr)
-        print(f"[overhired] Please edit {path} and restart.", file=sys.stderr)
+        print(f"[grapply] Created default config at {path}", file=sys.stderr)
+        print(f"[grapply] Please edit {path} and restart.", file=sys.stderr)
     return path
 
 
@@ -180,7 +180,7 @@ def load() -> dict[str, Any]:
 
     if tomllib is None:
         print(
-            f"[overhired] WARNING: cannot read {path} — "
+            f"[grapply] WARNING: cannot read {path} — "
             "install 'tomli' (pip install tomli) for Python < 3.11.",
             file=sys.stderr,
         )
@@ -192,7 +192,7 @@ def load() -> dict[str, Any]:
             user = tomllib.load(f)
         cfg = _merge(cfg, user)
     except Exception as exc:
-        print(f"[overhired] WARNING: could not parse {path}: {exc}", file=sys.stderr)
+        print(f"[grapply] WARNING: could not parse {path}: {exc}", file=sys.stderr)
 
     cfg["output_dir"] = str(Path(cfg["output_dir"]).expanduser())
     return cfg
@@ -283,7 +283,7 @@ def load_resume_text(cfg: dict[str, Any]) -> str:
         return ""
     path = Path(raw_path).expanduser()
     if not path.exists():
-        print(f"[overhired] WARNING: resume not found at {path}", file=sys.stderr)
+        print(f"[grapply] WARNING: resume not found at {path}", file=sys.stderr)
         return ""
     try:
         if path.suffix.lower() == ".pdf":
@@ -291,7 +291,7 @@ def load_resume_text(cfg: dict[str, Any]) -> str:
                 from pypdf import PdfReader  # type: ignore[import]
             except ImportError:
                 print(
-                    "[overhired] WARNING: pypdf not installed — cannot read PDF resume. "
+                    "[grapply] WARNING: pypdf not installed — cannot read PDF resume. "
                     "Run: pip install pypdf",
                     file=sys.stderr,
                 )
@@ -306,14 +306,14 @@ def load_resume_text(cfg: dict[str, Any]) -> str:
         _save_resume_cache(text)
         return text
     except Exception as exc:
-        print(f"[overhired] WARNING: could not read resume at {path}: {exc}", file=sys.stderr)
+        print(f"[grapply] WARNING: could not read resume at {path}: {exc}", file=sys.stderr)
         return ""
 
 
 def _save_resume_cache(text: str) -> None:
-    """Write extracted resume text to ~/.overhired/resume.txt for inspection."""
+    """Write extracted resume text to ~/.grapply/resume.txt for inspection."""
     try:
         cache = _config_path().parent / "resume.txt"
         cache.write_text(text, encoding="utf-8")
     except Exception as exc:
-        print(f"[overhired] WARNING: could not save resume cache: {exc}", file=sys.stderr)
+        print(f"[grapply] WARNING: could not save resume cache: {exc}", file=sys.stderr)

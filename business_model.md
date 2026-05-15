@@ -26,7 +26,7 @@ It is similar to why cloud vendors preferred *functions-as-a-service* over
 *containers* — more granular billing. The pattern here is essentially
 **"compile the cloud out of the hot path."**
 
-## Why This Is the Right Trade-off for overhired
+## Why This Is the Right Trade-off for grapply
 
 - Users get sub-second re-extractions after the first visit
 - LLM dependency shrinks over time as the parser/filler library grows
@@ -35,7 +35,7 @@ It is similar to why cloud vendors preferred *functions-as-a-service* over
 
 ## Analogy
 
-| Software world       | overhired equivalent            |
+| Software world       | grapply equivalent            |
 |----------------------|---------------------------------|
 | AOT compilation      | LLM generates parser once       |
 | Compiled binary      | Cached `.py` / `.js` file       |
@@ -49,7 +49,7 @@ The same pattern can be applied anywhere the logic is:
 2. Structurally stable once written
 3. Triggered repeatedly on similar inputs
 
-**Examples already in overhired:**
+**Examples already in grapply:**
 - `extractor.py` — job title/company parser per domain
 - `ats_filler.py` — ATS form filler per domain
 

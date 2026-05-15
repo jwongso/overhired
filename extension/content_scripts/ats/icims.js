@@ -1,5 +1,5 @@
 /**
- * overhired — iCIMS ATS form filler
+ * grapply — iCIMS ATS form filler
  * Matches: *.icims.com
  *
  * iCIMS has two generations:
@@ -11,20 +11,20 @@
  * (careers.company.com → iframe src="company.icims.com"). Content scripts cannot
  * cross iframe origins; in that case Fill Form is a no-op with a console warning.
  *
- * Classic content script — registers handler on window.__overhiredATS.icims
+ * Classic content script — registers handler on window.__grapplyATS.icims
  */
 (function () {
   'use strict';
 
-  if (!window.__overhiredCommon) { console.error('[overhired] common.js must load before icims.js'); return; }
+  if (!window.__grapplyCommon) { console.error('[grapply] common.js must load before icims.js'); return; }
 
-  const { setValue, waitFor, fillCoverLetterTextarea } = window.__overhiredCommon;
+  const { setValue, waitFor, fillCoverLetterTextarea } = window.__grapplyCommon;
 
   async function fill(profile, coverLetter) {
     // Guard: if the actual form lives in a cross-origin iframe we can't reach it.
     const iframes = document.querySelectorAll('iframe[src*="icims"]');
     if (iframes.length > 0) {
-      console.warn('[overhired] iCIMS: form is in a cross-origin iframe — cannot auto-fill.');
+      console.warn('[grapply] iCIMS: form is in a cross-origin iframe — cannot auto-fill.');
       return;
     }
 
@@ -116,5 +116,5 @@
     if (el) setValue(el, value);
   }
 
-  window.__overhiredATS.icims = fill;
+  window.__grapplyATS.icims = fill;
 })();

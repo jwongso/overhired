@@ -1,5 +1,5 @@
 """
-overhired — MCP server (real MCP protocol via FastMCP)
+grapply — MCP server (real MCP protocol via FastMCP)
 
 This is a proper MCP server that any MCP client can connect to:
   - Claude Desktop
@@ -61,9 +61,9 @@ _CFG = cfg_module.load()
 _AI  = ai_module.AIClient(_CFG["ai"])
 
 mcp = FastMCP(
-    name="overhired",
+    name="grapply",
     instructions=(
-        "overhired tools for job seekers: parse job pages, track applications, "
+        "grapply tools for job seekers: parse job pages, track applications, "
         "decode corporate jargon, score job fit, and research companies."
     ),
 )
@@ -93,7 +93,7 @@ def run_parser(code: str, text: str) -> dict:
     description=(
         "Save a working parser for a domain. "
         "Call this ONLY after run_parser confirms a non-empty title. "
-        "The parser is cached in ~/.overhired/parsers/ and reused on future scans."
+        "The parser is cached in ~/.grapply/parsers/ and reused on future scans."
     )
 )
 def save_parser(domain: str, code: str) -> dict:
@@ -118,7 +118,7 @@ def read_parser(domain: str) -> dict:
 
 @mcp.tool(
     description=(
-        "List all cached parsers in ~/.overhired/parsers/ "
+        "List all cached parsers in ~/.grapply/parsers/ "
         "with domain, file size, and last-modified date."
     )
 )

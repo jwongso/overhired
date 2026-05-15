@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "overhired",
+  "name": "grapply",
   "version": "1.0.0",
   "description": "Generate personalized cover letters from job postings and auto-fill ATS forms.",
 
@@ -15,7 +15,7 @@
     "<all_urls>",
     "http://localhost:*/*",
     "http://127.0.0.1:*/*",
-    "https://fengshui.overhired.work/*"
+    "https://fengshui.grapply.work/*"
   ],
 
   "background": {

@@ -52,7 +52,12 @@ class AIClient:
         )
 
         raw_endpoint = ai_cfg.get("endpoint", "").rstrip("/")
-        if not raw_endpoint:
+        # Auto-select the provider's default endpoint when none is set, or when
+        # the configured endpoint is the Ollama default but the provider isn't ollama
+        # (catches the common case of changing provider without clearing endpoint).
+        if not raw_endpoint or (
+            raw_endpoint == OLLAMA_DEFAULT_ENDPOINT and self.provider != "ollama"
+        ):
             if self.provider == "claude":
                 raw_endpoint = CLAUDE_DEFAULT_ENDPOINT
             elif self.provider == "openai":
@@ -180,10 +185,12 @@ class AIClient:
     def health_check(self) -> tuple[bool, str]:
         """Return (is_reachable, model_name).
 
-        Queries /v1/models to both verify reachability and discover the
-        actual model name served by the endpoint. Falls back to the
-        configured model name when the endpoint is unreachable or the
-        response shape is unexpected.
+        For Ollama/OpenAI: queries /v1/models to verify reachability and
+        discover the served model name.
+        For Claude: queries /v1/models just for reachability, but always
+        returns the configured model name (Anthropic's list order is not
+        meaningful for selecting a specific model).
+        Falls back to the configured model name on any error.
         """
         try:
             headers = (
@@ -193,6 +200,8 @@ class AIClient:
             )
             r = httpx.get(f"{self.endpoint}/v1/models", headers=headers, timeout=5)
             if 200 <= r.status_code < 300:
+                if self.provider == "claude":
+                    return True, self.model
                 models = r.json().get("data", [])
                 model_name = models[0].get("id", self.model) if models else self.model
                 return True, model_name

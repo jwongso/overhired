@@ -14,4 +14,4 @@ fi
 
 echo "Starting companion on http://127.0.0.1:$PORT ..."
 cd "$SCRIPT_DIR"
-exec python -m uvicorn main:app --host 127.0.0.1 --port "$PORT" "$@"
+exec python main.py "$@"

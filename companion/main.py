@@ -335,12 +335,12 @@ def health():
     fillers_cached = sum(1 for _ in ats_filler_module.FILLERS_DIR.glob("*.json"))
     warnings = cfg_module.get_setup_warnings(CFG)
     if not ai_ok:
-        warnings.insert(0, f"AI unreachable at {CFG['ai']['endpoint']} — is Ollama running?")
+        warnings.insert(0, f"AI unreachable at {AI.endpoint} — is Ollama running?")
     return {
         "status":         "ok",
-        "ai_provider":     CFG["ai"]["provider"],
+        "ai_provider":     AI.provider,
         "ai_model":        ai_model,
-        "ai_endpoint":     CFG["ai"]["endpoint"],
+        "ai_endpoint":     AI.endpoint,
         "ai_reachable":    ai_ok,
         "fillers_cached":  fillers_cached,
         "profile":         CFG.get("profile", {}),
@@ -371,7 +371,7 @@ def generate(req: GenerateRequest, _: None = Depends(_require_token)):
     user_prompt   = _build_user_prompt(req)
 
     try:
-        logger.info("[generate] calling AI (%s %s)...", CFG['ai']['provider'], CFG['ai']['model'])
+        logger.info("[generate] calling AI (%s %s)...", ai.provider, ai.model)
         raw = ai.generate(system_prompt, user_prompt)
         logger.info("[generate] AI done — response %d chars", len(raw))
     except ai_module.AIError as exc:
@@ -803,8 +803,8 @@ def main() -> None:
 
     print(f"\ngrapply companion  |  http://{args.host}:{args.port}")
     print(f"  Config       : {cfg_module._config_path()}")
-    print(f"  AI provider  : {CFG['ai']['provider']}  ({CFG['ai']['endpoint']})")
-    print(f"  AI model     : {CFG['ai']['model']}")
+    print(f"  AI provider  : {AI.provider}  ({AI.endpoint})")
+    print(f"  AI model     : {AI.model}")
     print(f"  Output dir   : {CFG['output_dir']}")
     print(f"  Log level    : {args.log_level}")
 

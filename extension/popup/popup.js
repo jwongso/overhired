@@ -83,6 +83,12 @@ const DEFAULT_SETTINGS = {
 
 const load  = (keys) => chrome.storage.local.get(keys);
 const store = (obj)  => chrome.storage.local.set(obj);
+
+// sendMsg is kept only for PARSE_PDF (MuPDF WASM lives in the service worker).
+// All companion API calls bypass the service worker entirely — use companionUrl/
+// companionHeaders + fetch() directly. The side panel is a persistent web page
+// with no idle timeout, so long LLM calls (extract, generate, save) never hit
+// the MV3 "message channel closed before a response" error.
 const sendMsg = (msg) => chrome.runtime.sendMessage(msg);
 
 async function companionHealth(url = 'http://localhost:7878') {
@@ -90,6 +96,16 @@ async function companionHealth(url = 'http://localhost:7878') {
     const r = await fetch(`${url}/health`, { signal: AbortSignal.timeout(3000) });
     return r.ok ? await r.json() : null;
   } catch { return null; }
+}
+
+// Companion fetch helpers — used by all direct companion calls in this file.
+function companionUrl(s) {
+  return (s?.companion_url || 'http://localhost:7878').replace(/\/$/, '');
+}
+function companionHeaders(s) {
+  const h = { 'Content-Type': 'application/json' };
+  if (s?.companion_token) h['X-Overhired-Token'] = s.companion_token;
+  return h;
 }
 
 // Persist a saved job into the savedJobs list (max 5, newest first).
@@ -276,7 +292,10 @@ function GenerateTab({ settings, health }) {
       if (!active || attempts >= MAX_ATTEMPTS) return;
       attempts++;
       try {
-        const r = await sendMsg({ type: 'POLL_FILES', jobId, settings });
+        const pollResp = await fetch(`${companionUrl(settings)}/jobs/${encodeURIComponent(jobId)}/files`, {
+          headers: companionHeaders(settings),
+        });
+        const r = pollResp.ok ? await pollResp.json() : null;
         if (r && !r.error) {
           setFileStatus(r);
           const allDone = r.cover_letter && r.summary && r.score && r.insight;
@@ -318,13 +337,16 @@ function GenerateTab({ settings, health }) {
 
       // Ask companion to determine page mode — reliable HTML+domain analysis,
       // no more noisy client-side formFieldCount heuristic.
-      const scanResp = await sendMsg({
-        type: 'SCAN',
-        domain,
-        page_html: j?.page_html || '',
-        url: j?.url || tab.url || '',
-        settings,
+      const scanFetch = await fetch(`${companionUrl(settings)}/scan`, {
+        method:  'POST',
+        headers: companionHeaders(settings),
+        body:    JSON.stringify({ domain, page_html: j?.page_html || '', url: j?.url || tab.url || '' }),
       });
+      if (!scanFetch.ok) {
+        const detail = await scanFetch.json().catch(() => ({}));
+        throw new Error(detail.detail || `Scan failed: ${scanFetch.status}`);
+      }
+      const scanResp = await scanFetch.json();
       if (scanResp?.error) throw new Error(scanResp.error);
       const isAts = scanResp?.mode === 'ats_form';
 
@@ -352,14 +374,16 @@ function GenerateTab({ settings, health }) {
       }
 
       setScanState('learning');
-      const resp = await sendMsg({
-        type: 'EXTRACT',
-        domain,
-        page_text: j?.page_text || '',
-        page_html: j?.page_html || '',
-        url: j?.url || tab.url || '',
-        settings,
+      const extractFetch = await fetch(`${companionUrl(settings)}/extract`, {
+        method:  'POST',
+        headers: companionHeaders(settings),
+        body:    JSON.stringify({ domain, page_text: j?.page_text || '', page_html: j?.page_html || '', url: j?.url || tab.url || '' }),
       });
+      if (!extractFetch.ok) {
+        const detail = await extractFetch.json().catch(() => ({}));
+        throw new Error(detail.detail || `Extract failed: ${extractFetch.status}`);
+      }
+      const resp = await extractFetch.json();
       if (resp?.error) throw new Error(resp.error);
       if (!resp?.title) {
         setScanError('Could not detect job info — open a specific job posting and try again.');
@@ -394,29 +418,45 @@ function GenerateTab({ settings, health }) {
     setJobId(null);
     setFileStatus(null);
     try {
-      const resp = await sendMsg({
-        type: 'GENERATE',
-        job: { title, company, description: desc },
-        settings,
+      const genFetch = await fetch(`${companionUrl(settings)}/generate`, {
+        method:  'POST',
+        headers: companionHeaders(settings),
+        body:    JSON.stringify({
+          job_title:            title,
+          company,
+          job_description:      desc,
+          resume_text:          '',
+          per_job_instructions: '',
+        }),
       });
+      if (!genFetch.ok) {
+        const detail = await genFetch.json().catch(() => ({}));
+        throw new Error(detail.detail || `Generate failed: ${genFetch.status}`);
+      }
+      const resp = await genFetch.json();
       if (resp.error) throw new Error(resp.error);
       setResult(resp);
       setStatus('done');
-      sendMsg({
-        type: 'SAVE',
-        company, role: title,
-        coverMd: resp.cover_letter_md,
-        coverHtml: resp.cover_letter_html,
-        domain: jobDomain,
-        jobDescription: desc,
-        resumeText: '',
-        settings,
-      }).then(r => {
-        if (r?.md_path) {
-          setSavedPaths(r);
+      fetch(`${companionUrl(settings)}/save`, {
+        method:  'POST',
+        headers: companionHeaders(settings),
+        body:    JSON.stringify({
+          company,
+          role:              title,
+          cover_letter_md:   resp.cover_letter_md,
+          cover_letter_html: resp.cover_letter_html,
+          domain:            jobDomain   || '',
+          job_description:   desc        || '',
+          resume_text:       '',
+        }),
+      }).then(async r => {
+        if (!r.ok) return;
+        const saved = await r.json();
+        if (saved?.md_path) {
+          setSavedPaths(saved);
           persistSavedJob({ title, company, jobDomain, cover_letter_md: resp.cover_letter_md, savedAt: Date.now() });
         }
-        if (r?.job_id) setJobId(r.job_id);
+        if (saved?.job_id) setJobId(saved.job_id);
       }).catch(err => console.warn('[overhired] Auto-save failed:', err.message));
     } catch (e) {
       setErrMsg(e.message);

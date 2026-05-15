@@ -25,7 +25,7 @@ VALID_STATUSES = {
 # ── Schema ────────────────────────────────────────────────────────────────────
 
 # Bump this whenever the schema changes. Migration code below handles upgrades.
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS applications (
@@ -53,9 +53,40 @@ CREATE TABLE IF NOT EXISTS html_strategy_stats (
     ran_at    TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_hss_domain ON html_strategy_stats(domain);
+
+CREATE TABLE IF NOT EXISTS token_usage (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts               TEXT    NOT NULL,
+    provider         TEXT    NOT NULL,
+    model            TEXT    NOT NULL,
+    endpoint         TEXT    NOT NULL,
+    prompt_tokens    INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens     INTEGER NOT NULL DEFAULT 0,
+    estimated_cost_usd REAL  NOT NULL DEFAULT 0.0
+);
+CREATE INDEX IF NOT EXISTS idx_tu_ts       ON token_usage(ts);
+CREATE INDEX IF NOT EXISTS idx_tu_provider ON token_usage(provider);
+CREATE INDEX IF NOT EXISTS idx_tu_endpoint ON token_usage(endpoint);
 """
 
 _MIGRATIONS: dict[int, str] = {
+    2: """
+CREATE TABLE IF NOT EXISTS token_usage (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts               TEXT    NOT NULL,
+    provider         TEXT    NOT NULL,
+    model            TEXT    NOT NULL,
+    endpoint         TEXT    NOT NULL,
+    prompt_tokens    INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens     INTEGER NOT NULL DEFAULT 0,
+    estimated_cost_usd REAL  NOT NULL DEFAULT 0.0
+);
+CREATE INDEX IF NOT EXISTS idx_tu_ts       ON token_usage(ts);
+CREATE INDEX IF NOT EXISTS idx_tu_provider ON token_usage(provider);
+CREATE INDEX IF NOT EXISTS idx_tu_endpoint ON token_usage(endpoint);
+""",
     1: """
 CREATE TABLE IF NOT EXISTS html_strategy_stats (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -251,6 +282,171 @@ def delete_application(id: int) -> dict:
             return {"error": f"No application with id={id}"}
         conn.execute("DELETE FROM applications WHERE id=?", (id,))
     return {"deleted": id, "company": row["company"], "title": row["title"]}
+
+
+# ── Token usage tracking ──────────────────────────────────────────────────────
+
+# Known pricing per 1M tokens (prompt, completion). Update as prices change.
+_PRICING: dict[str, tuple[float, float]] = {
+    "gpt-4.1":            (2.00,  8.00),
+    "gpt-4.1-mini":       (0.40,  1.60),
+    "gpt-4.1-nano":       (0.10,  0.40),
+    "gpt-4o":             (2.50, 10.00),
+    "gpt-4o-mini":        (0.15,  0.60),
+    "claude-opus-4-7":    (15.0, 75.00),
+    "claude-sonnet-4-6":  (3.00, 15.00),
+    "claude-haiku-4-5":   (0.80,  4.00),
+}
+
+
+def _estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+    for name, (p_price, c_price) in _PRICING.items():
+        if name in model:
+            return round(
+                (prompt_tokens * p_price + completion_tokens * c_price) / 1_000_000, 6
+            )
+    return 0.0
+
+
+def log_token_usage(
+    provider: str,
+    model: str,
+    endpoint: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+) -> None:
+    """Record token usage for one AI call.
+
+    Args:
+        provider:          'ollama', 'openai', or 'claude'.
+        model:             Model name, e.g. 'gpt-4.1-mini'.
+        endpoint:          Which API endpoint triggered the call, e.g. 'generate', 'extract'.
+        prompt_tokens:     Input tokens consumed.
+        completion_tokens: Output tokens generated.
+    """
+    total = prompt_tokens + completion_tokens
+    cost  = _estimate_cost(model, prompt_tokens, completion_tokens)
+    now   = datetime.utcnow().isoformat(sep=" ", timespec="seconds")
+    with _db() as conn:
+        conn.execute(
+            "INSERT INTO token_usage "
+            "(ts, provider, model, endpoint, prompt_tokens, completion_tokens, total_tokens, estimated_cost_usd) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (now, provider, model, endpoint, prompt_tokens, completion_tokens, total, cost),
+        )
+
+
+def get_token_daily(
+    days: int = 30,
+    provider: str = "",
+    endpoint: str = "",
+) -> list[dict]:
+    """Return daily token usage aggregates, ordered by date ascending.
+
+    Args:
+        days:     Number of past days to include. 0 = all time.
+        provider: Filter by provider. Empty = all.
+        endpoint: Filter by endpoint. Empty = all.
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if days:
+        from datetime import timedelta
+        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat(sep=" ", timespec="seconds")
+        clauses.append("ts >= ?")
+        params.append(cutoff)
+    if provider:
+        clauses.append("provider = ?")
+        params.append(provider)
+    if endpoint:
+        clauses.append("endpoint = ?")
+        params.append(endpoint)
+
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    with _db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT DATE(ts) AS date,
+                   COUNT(*) AS calls,
+                   SUM(prompt_tokens) AS prompt_tokens,
+                   SUM(completion_tokens) AS completion_tokens,
+                   ROUND(SUM(estimated_cost_usd), 6) AS cost_usd
+            FROM token_usage {where}
+            GROUP BY DATE(ts)
+            ORDER BY date ASC
+            """,
+            params,
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_token_stats(
+    provider: str = "",
+    model: str = "",
+    endpoint: str = "",
+    days: int = 0,
+) -> dict:
+    """Return aggregate token usage and estimated cost.
+
+    Args:
+        provider: Filter by provider. Empty = all.
+        model:    Filter by model. Empty = all.
+        endpoint: Filter by endpoint. Empty = all.
+        days:     Only include records from the last N days. 0 = all time.
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if provider:
+        clauses.append("provider = ?")
+        params.append(provider)
+    if model:
+        clauses.append("model = ?")
+        params.append(model)
+    if endpoint:
+        clauses.append("endpoint = ?")
+        params.append(endpoint)
+    if days:
+        from datetime import timedelta
+        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat(sep=" ", timespec="seconds")
+        clauses.append("ts >= ?")
+        params.append(cutoff)
+
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+
+    with _db() as conn:
+        totals = conn.execute(
+            f"""
+            SELECT
+                COUNT(*)                        AS calls,
+                SUM(prompt_tokens)              AS prompt_tokens,
+                SUM(completion_tokens)          AS completion_tokens,
+                SUM(total_tokens)               AS total_tokens,
+                ROUND(SUM(estimated_cost_usd), 6) AS total_cost_usd
+            FROM token_usage {where}
+            """,
+            params,
+        ).fetchone()
+
+        by_model = conn.execute(
+            f"""
+            SELECT provider, model, endpoint,
+                COUNT(*)                           AS calls,
+                SUM(prompt_tokens)                 AS prompt_tokens,
+                SUM(completion_tokens)             AS completion_tokens,
+                ROUND(SUM(estimated_cost_usd), 6)  AS cost_usd
+            FROM token_usage {where}
+            GROUP BY provider, model, endpoint
+            ORDER BY cost_usd DESC
+            """,
+            params,
+        ).fetchall()
+
+    return {
+        "summary":  dict(totals),
+        "by_model": [dict(r) for r in by_model],
+    }
 
 
 # ── HTML strategy catalog ─────────────────────────────────────────────────────

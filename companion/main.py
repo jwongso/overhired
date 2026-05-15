@@ -33,6 +33,7 @@ import markdown as md_lib
 import uvicorn
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 import analyzer as analyzer_module
@@ -126,6 +127,8 @@ class SaveRequest(BaseModel):
     job_description:   str = ""
     resume_text:       str = ""
     domain:            str = ""
+    ai_provider:       str = ""
+    ai_model:          str = ""
     # output_dir intentionally removed from the public API — the companion
     # always writes under its configured output_dir to prevent arbitrary
     # file writes by any caller.
@@ -372,7 +375,7 @@ def generate(req: GenerateRequest, _: None = Depends(_require_token)):
 
     try:
         logger.info("[generate] calling AI (%s %s)...", ai.provider, ai.model)
-        raw = ai.generate(system_prompt, user_prompt)
+        raw = ai.generate(system_prompt, user_prompt, _endpoint="generate")
         logger.info("[generate] AI done — response %d chars", len(raw))
     except ai_module.AIError as exc:
         logger.error("[generate] AI error: %s", exc)
@@ -400,7 +403,11 @@ def save(req: SaveRequest, background_tasks: BackgroundTasks, _: None = Depends(
     out_root = Path(CFG["output_dir"]).expanduser()
     company  = _safe_name(req.company)
     role     = _safe_name(req.role)
-    dest     = out_root / company / role
+    # Resolve effective provider/model - prefer request fields, fall back to
+    # companion config so the path is always populated even for older clients.
+    provider = _safe_name(req.ai_provider or CFG["ai"]["provider"] or "unknown")
+    model    = _safe_name(req.ai_model    or CFG["ai"]["model"]    or "unknown")
+    dest     = out_root / company / role / provider / model
     dest.mkdir(parents=True, exist_ok=True)
 
     md_path   = dest / "cover_letter.md"
@@ -438,16 +445,12 @@ def job_files(job_id: str, _: None = Depends(_require_token)):
     out_root = Path(CFG["output_dir"]).expanduser()
     dest: Path | None = None
     if out_root.exists():
-        for company_dir in out_root.iterdir():
-            if not company_dir.is_dir():
-                continue
-            for role_dir in company_dir.iterdir():
-                if not role_dir.is_dir():
-                    continue
-                if hashlib.md5(str(role_dir).encode()).hexdigest()[:12] == job_id:
-                    dest = role_dir
-                    break
-            if dest:
+        # New structure: company/role/provider/model (4 levels)
+        # Legacy structure: company/role (2 levels) — still supported
+        for path in out_root.rglob("cover_letter.md"):
+            candidate = path.parent
+            if hashlib.md5(str(candidate).encode()).hexdigest()[:12] == job_id:
+                dest = candidate
                 break
     if dest is None:
         raise HTTPException(status_code=404, detail=f"job_id {job_id!r} not found")
@@ -603,6 +606,36 @@ def delete_parser_endpoint(domain: str, _: None = Depends(_require_token)):
     return result
 
 
+@app.get("/stats", response_class=HTMLResponse)
+def stats_page():
+    token = CFG.get("auth_token", "")
+    return HTMLResponse(content=_STATS_HTML.replace("%%AUTH_TOKEN%%", token))
+
+
+@app.get("/token-stats/daily")
+def token_stats_daily_endpoint(
+    days: int = 30,
+    provider: str = "",
+    endpoint: str = "",
+):
+    import tracker
+    return tracker.get_token_daily(days=days, provider=provider, endpoint=endpoint)
+
+
+@app.get("/token-stats")
+def token_stats_endpoint(
+    provider: str = "",
+    model: str = "",
+    endpoint: str = "",
+    days: int = 0,
+    _: None = Depends(_require_token),
+):
+    import tracker
+    return tracker.get_token_stats(
+        provider=provider, model=model, endpoint=endpoint, days=days
+    )
+
+
 @app.delete("/fillers/{domain}")
 def delete_filler_endpoint(domain: str, _: None = Depends(_require_token)):
     from ats_filler import FILLERS_DIR
@@ -612,6 +645,393 @@ def delete_filler_endpoint(domain: str, _: None = Depends(_require_token)):
         path.unlink()
         return {"deleted": domain}
     raise HTTPException(status_code=404, detail=f"No filler for {domain!r}")
+
+
+# ── Stats page HTML ──────────────────────────────────────────────────────────
+
+_STATS_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>grapply - Usage Stats</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    :root{--bg:#0f1117;--surface:#1a1d27;--border:#2a2d3a;--accent:#6c63ff;--ok:#4caf7d;--danger:#e05252;--text:#e8eaf0;--muted:#7b7f96}
+    body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;min-height:100vh}
+    a{color:var(--accent);text-decoration:none}
+    header{padding:20px 32px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+    .logo{font-weight:700;font-size:20px;letter-spacing:-.3px}.logo span{color:var(--accent)}
+    .subtitle{color:var(--muted);font-size:12px;flex:1}
+    .time-filter{display:flex;gap:4px}
+    .time-filter button{padding:6px 14px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--muted);cursor:pointer;font-size:12px;font-weight:500;transition:all .15s}
+    .time-filter button.active{background:var(--accent);border-color:var(--accent);color:#fff}
+    .time-filter button:hover:not(.active){border-color:var(--accent);color:var(--text)}
+    .refresh{font-size:11px;color:var(--muted);margin-left:8px}
+    .main{padding:24px 32px;max-width:1280px;margin:0 auto}
+    .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:24px}
+    .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px}
+    .card-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:8px}
+    .card-value{font-size:26px;font-weight:700;line-height:1}
+    .card-value.accent{color:var(--accent)}.card-value.ok{color:var(--ok)}
+    .card-sub{font-size:11px;color:var(--muted);margin-top:6px}
+    .charts{display:grid;grid-template-columns:2fr 1fr 1fr;gap:14px;margin-bottom:24px}
+    .chart-box{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px}
+    .chart-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:14px}
+    .insights{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin-bottom:24px}
+    .section-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:14px}
+    .insights-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+    .insight-item{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 14px}
+    .insight-label{font-size:11px;color:var(--muted);margin-bottom:4px}
+    .insight-value{font-size:14px;font-weight:600;color:var(--text)}
+    .insight-value.accent{color:var(--accent)}.insight-value.ok{color:var(--ok)}
+    .table-box{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px}
+    table{width:100%;border-collapse:collapse;font-size:12px}
+    th{text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
+    td{padding:10px 12px;border-bottom:1px solid #1e2130}
+    tr:last-child td{border-bottom:none}
+    tr:hover td{background:#1e2130}
+    .pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}
+    .pill-generate{background:#1a2b3a;color:#6c9fff}
+    .pill-extract{background:#1a3a24;color:#4caf7d}
+    .pill-analyze{background:#2b1a3a;color:#b06cff}
+    .loading{display:flex;align-items:center;justify-content:center;padding:80px;color:var(--muted)}
+    .empty-row td{text-align:center;color:var(--muted);padding:32px}
+    @media(max-width:900px){.charts{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="logo">gr<span>apply</span></div>
+    <div class="subtitle">AI Usage &amp; Cost Dashboard</div>
+  </div>
+  <div class="time-filter">
+    <button data-days="1">Today</button>
+    <button data-days="7">7 days</button>
+    <button data-days="30" class="active">30 days</button>
+    <button data-days="0">All time</button>
+  </div>
+  <span class="refresh" id="refresh-label">auto-refresh 30s</span>
+</header>
+
+<div class="main">
+  <div class="loading" id="loading">Loading stats...</div>
+  <div id="content" style="display:none">
+
+    <div class="cards">
+      <div class="card">
+        <div class="card-label">Total Calls</div>
+        <div class="card-value accent" id="c-calls">0</div>
+        <div class="card-sub" id="c-calls-sub"></div>
+      </div>
+      <div class="card">
+        <div class="card-label">Total Tokens</div>
+        <div class="card-value" id="c-tokens">0</div>
+        <div class="card-sub" id="c-tokens-sub"></div>
+      </div>
+      <div class="card">
+        <div class="card-label">Est. Cost (USD)</div>
+        <div class="card-value ok" id="c-cost">$0.00</div>
+        <div class="card-sub" id="c-cost-sub"></div>
+      </div>
+      <div class="card">
+        <div class="card-label">Avg / Cover Letter</div>
+        <div class="card-value" id="c-avg">-</div>
+        <div class="card-sub">per generate call</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Parser Extractions</div>
+        <div class="card-value" id="c-extract">0</div>
+        <div class="card-sub">LLM calls (cache misses)</div>
+      </div>
+    </div>
+
+    <div class="charts">
+      <div class="chart-box">
+        <div class="chart-title">Daily Cost (USD)</div>
+        <canvas id="daily-chart"></canvas>
+      </div>
+      <div class="chart-box">
+        <div class="chart-title">Calls by Endpoint</div>
+        <canvas id="endpoint-chart"></canvas>
+      </div>
+      <div class="chart-box">
+        <div class="chart-title">Cost by Model</div>
+        <canvas id="model-chart"></canvas>
+      </div>
+    </div>
+
+    <div class="insights">
+      <div class="section-title">Insights</div>
+      <div class="insights-grid" id="insights-grid"></div>
+    </div>
+
+    <div class="table-box">
+      <div class="section-title">Breakdown by Provider / Model / Endpoint</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Provider</th><th>Model</th><th>Endpoint</th>
+            <th>Calls</th><th>Prompt Tokens</th><th>Completion Tokens</th>
+            <th>Est. Cost</th><th>Avg / Call</th>
+          </tr>
+        </thead>
+        <tbody id="breakdown-body"></tbody>
+      </table>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  const AUTH_TOKEN = '%%AUTH_TOKEN%%';
+  const H = AUTH_TOKEN ? {'X-Grapply-Token': AUTH_TOKEN} : {};
+
+  let dailyChart, endpointChart, modelChart;
+  let currentDays = 30;
+
+  Chart.defaults.color = '#7b7f96';
+  Chart.defaults.borderColor = '#2a2d3a';
+  Chart.defaults.font.family = "-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif";
+  Chart.defaults.font.size = 11;
+
+  const C = {
+    accent:   '#6c63ff',
+    ok:       '#4caf7d',
+    generate: '#6c9fff',
+    extract:  '#4caf7d',
+    analyze:  '#b06cff',
+    warn:     '#f0a050',
+    danger:   '#e05252',
+  };
+
+  const fmt = n => n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n||0);
+  const fmtC = n => n > 0 ? '$'+(n).toFixed(6).replace(/0+$/,'').replace(/\\.$/, '') : '$0';
+  const fmtC4 = n => '$'+(n||0).toFixed(4);
+
+  async function load(days) {
+    document.getElementById('loading').style.display = 'flex';
+    document.getElementById('content').style.display = 'none';
+    const p = days ? '?days='+days : '';
+    try {
+      const [stats, daily] = await Promise.all([
+        fetch('/token-stats'+p, {headers:H}).then(r=>r.json()),
+        fetch('/token-stats/daily'+p, {headers:H}).then(r=>r.json()),
+      ]);
+      render(stats, daily);
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('content').style.display = '';
+    } catch(e) {
+      document.getElementById('loading').textContent = 'Error: '+e.message;
+    }
+  }
+
+  function render(stats, daily) {
+    const s = stats.summary || {};
+    const bm = stats.by_model || [];
+
+    // Cards
+    const genRows = bm.filter(r=>r.endpoint==='generate');
+    const extRows = bm.filter(r=>r.endpoint==='extract');
+    const genCalls = genRows.reduce((a,r)=>a+r.calls,0);
+    const genCost  = genRows.reduce((a,r)=>a+(r.cost_usd||0),0);
+    const extCalls = extRows.reduce((a,r)=>a+r.calls,0);
+
+    document.getElementById('c-calls').textContent = fmt(s.calls||0);
+    document.getElementById('c-tokens').textContent = fmt(s.total_tokens||0);
+    document.getElementById('c-cost').textContent = fmtC4(s.total_cost_usd||0);
+    document.getElementById('c-avg').textContent = genCalls>0 ? fmtC(genCost/genCalls) : '-';
+    document.getElementById('c-extract').textContent = fmt(extCalls);
+    document.getElementById('c-calls-sub').textContent = genCalls+' generate, '+extCalls+' extract';
+    document.getElementById('c-tokens-sub').textContent = fmt(s.prompt_tokens||0)+' prompt + '+fmt(s.completion_tokens||0)+' completion';
+    document.getElementById('c-cost-sub').textContent = genCalls>0 ? fmtC4(genCost)+' on cover letters' : '';
+
+    renderDailyChart(daily);
+    renderEndpointChart(bm);
+    renderModelChart(bm);
+    renderInsights(s, bm, genCalls, genCost, extCalls);
+    renderTable(bm);
+  }
+
+  function renderDailyChart(daily) {
+    if (dailyChart) dailyChart.destroy();
+    const ctx = document.getElementById('daily-chart').getContext('2d');
+    if (!daily.length) {
+      ctx.canvas.parentNode.innerHTML = '<div style="color:var(--muted);text-align:center;padding:40px 0;font-size:12px">No data for this period</div>';
+      return;
+    }
+    const labels = daily.map(d=>d.date);
+    dailyChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {label:'Cost (USD)', data:daily.map(d=>d.cost_usd||0), borderColor:C.accent,
+           backgroundColor:C.accent+'22', fill:true, tension:.3,
+           pointRadius:labels.length>20?2:4, yAxisID:'y'},
+          {label:'Calls', data:daily.map(d=>d.calls||0), borderColor:C.ok,
+           backgroundColor:'transparent', tension:.3, borderDash:[5,4],
+           pointRadius:labels.length>20?2:4, yAxisID:'y1'},
+        ],
+      },
+      options: {
+        responsive:true,
+        interaction:{mode:'index',intersect:false},
+        plugins:{legend:{position:'top',labels:{boxWidth:10,padding:12}}},
+        scales:{
+          x:{grid:{color:'#1e2130'}},
+          y:{grid:{color:'#1e2130'},ticks:{callback:v=>'$'+v.toFixed(4)}},
+          y1:{position:'right',grid:{drawOnChartArea:false},ticks:{callback:v=>v+' calls'}},
+        },
+      },
+    });
+  }
+
+  function renderEndpointChart(bm) {
+    if (endpointChart) endpointChart.destroy();
+    const epMap = {};
+    for (const r of bm) epMap[r.endpoint] = (epMap[r.endpoint]||0)+r.calls;
+    const labels = Object.keys(epMap);
+    if (!labels.length) return;
+    const ctx = document.getElementById('endpoint-chart').getContext('2d');
+    endpointChart = new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels,
+        datasets:[{
+          data: labels.map(l=>epMap[l]),
+          backgroundColor: labels.map(l=>C[l]||C.accent),
+          borderColor:'#1a1d27', borderWidth:3,
+        }],
+      },
+      options:{
+        responsive:true,
+        plugins:{
+          legend:{position:'bottom',labels:{padding:12,boxWidth:10}},
+          tooltip:{callbacks:{label:c=>' '+c.label+': '+c.parsed+' calls'}},
+        },
+      },
+    });
+  }
+
+  function renderModelChart(bm) {
+    if (modelChart) modelChart.destroy();
+    const mMap = {};
+    for (const r of bm) mMap[r.model] = (mMap[r.model]||0)+(r.cost_usd||0);
+    const entries = Object.entries(mMap).sort((a,b)=>b[1]-a[1]);
+    if (!entries.length) return;
+    const ctx = document.getElementById('model-chart').getContext('2d');
+    const palette = [C.accent, C.ok, C.analyze, C.warn, C.danger];
+    modelChart = new Chart(ctx, {
+      type:'bar',
+      data:{
+        labels: entries.map(([m])=>m.length>22?m.slice(0,20)+'...':m),
+        datasets:[{
+          label:'Cost (USD)',
+          data: entries.map(([,v])=>v),
+          backgroundColor: entries.map((_,i)=>palette[i%palette.length]),
+          borderRadius:4,
+        }],
+      },
+      options:{
+        indexAxis:'y',
+        responsive:true,
+        plugins:{legend:{display:false}},
+        scales:{
+          x:{grid:{color:'#1e2130'},ticks:{callback:v=>'$'+v.toFixed(4)}},
+          y:{grid:{color:'#1e2130'}},
+        },
+      },
+    });
+  }
+
+  function renderInsights(s, bm, genCalls, genCost, extCalls) {
+    const items = [];
+
+    items.push({label:'Total spend', value:fmtC4(s.total_cost_usd||0), cls:'ok'});
+    items.push({label:'Cover letters generated', value:String(genCalls)});
+    items.push({label:'Parser extractions (LLM)', value:String(extCalls),
+      note: extCalls>0?'Each future visit uses cached parser (free)':''});
+
+    if (genCalls>0)
+      items.push({label:'Avg cost / cover letter', value:fmtC(genCost/genCalls)});
+
+    // Most used model
+    const mCalls = {};
+    for (const r of bm) mCalls[r.model]=(mCalls[r.model]||0)+r.calls;
+    const topM = Object.entries(mCalls).sort((a,b)=>b[1]-a[1])[0];
+    if (topM) items.push({label:'Most used model', value:topM[0], cls:'accent'});
+
+    // Best value (lowest avg cost/call, min 2 calls)
+    const mCost={}, mN={};
+    for (const r of bm) {
+      mCost[r.model]=(mCost[r.model]||0)+(r.cost_usd||0);
+      mN[r.model]=(mN[r.model]||0)+r.calls;
+    }
+    const candidates = Object.keys(mCost).filter(m=>mN[m]>=2);
+    if (candidates.length>1) {
+      const best = candidates.map(m=>({m, avg:mCost[m]/mN[m]})).sort((a,b)=>a.avg-b.avg)[0];
+      items.push({label:'Best value model', value:best.m+' ('+fmtC(best.avg)+'/call)'});
+    }
+
+    if ((s.calls||0)>0)
+      items.push({label:'Avg tokens / call', value:fmt(Math.round((s.total_tokens||0)/(s.calls||1)))});
+
+    const analyzeRows = bm.filter(r=>r.endpoint==='analyze');
+    const analyzeCalls = analyzeRows.reduce((a,r)=>a+r.calls,0);
+    if (analyzeCalls>0) items.push({label:'Analysis calls', value:String(analyzeCalls)});
+
+    document.getElementById('insights-grid').innerHTML = items.map(i=>`
+      <div class="insight-item">
+        <div class="insight-label">${i.label}</div>
+        <div class="insight-value${i.cls?' '+i.cls:''}">${i.value}</div>
+        ${i.note?`<div class="insight-label" style="margin-top:4px">${i.note}</div>`:''}
+      </div>`).join('');
+  }
+
+  function renderTable(bm) {
+    const tbody = document.getElementById('breakdown-body');
+    if (!bm.length) {
+      tbody.innerHTML='<tr class="empty-row"><td colspan="8">No data for this period</td></tr>';
+      return;
+    }
+    tbody.innerHTML = bm.map(r=>`
+      <tr>
+        <td>${r.provider}</td>
+        <td style="font-family:monospace;font-size:11px">${r.model}</td>
+        <td><span class="pill pill-${r.endpoint}">${r.endpoint}</span></td>
+        <td>${r.calls}</td>
+        <td>${fmt(r.prompt_tokens||0)}</td>
+        <td>${fmt(r.completion_tokens||0)}</td>
+        <td>${fmtC4(r.cost_usd||0)}</td>
+        <td>${fmtC(r.cost_usd/r.calls)}</td>
+      </tr>`).join('');
+  }
+
+  // Time filter
+  document.querySelectorAll('.time-filter button').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      document.querySelectorAll('.time-filter button').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      currentDays = +btn.dataset.days;
+      load(currentDays);
+    });
+  });
+
+  // Auto-refresh
+  let countdown = 30;
+  setInterval(()=>{
+    countdown--;
+    document.getElementById('refresh-label').textContent = 'auto-refresh '+countdown+'s';
+    if (countdown<=0) { countdown=30; load(currentDays); }
+  }, 1000);
+
+  load(currentDays);
+</script>
+</body>
+</html>"""
 
 
 # ── Prompt builders ───────────────────────────────────────────────────────────
@@ -757,10 +1177,12 @@ def _unwrap_fences(text: str) -> str:
 
 
 def _safe_name(name: str) -> str:
-    """Convert a company/role name to a safe directory component."""
+    """Convert a company/role/model name to a safe directory component."""
     name = name.strip()
-    name = re.sub(r"[^\w\s-]", "", name)       # remove special chars
+    name = re.sub(r"[:.]", "-", name)          # colon/dot → hyphen (e.g. qwen3:8b, gpt-4.1-mini)
+    name = re.sub(r"[^\w\s-]", "", name)       # remove remaining special chars
     name = re.sub(r"[\s_]+", "-", name)        # spaces → hyphens
+    name = re.sub(r"-{2,}", "-", name)         # collapse multiple hyphens
     name = name.strip("-")
     return name[:64] or "unknown"              # cap length
 

@@ -131,7 +131,7 @@ def decode_jargon(job_description: str, ai: "AIClient") -> dict:
         f"Already detected green flags: {[f['phrase'] for f in green_flags]}"
     )
     try:
-        raw = ai.generate(system, user).strip()
+        raw = ai.generate(system, user, _endpoint="analyze").strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         llm_out = json.loads(raw)
@@ -183,7 +183,7 @@ def score_job_fit(job_description: str, resume_text: str, ai: "AIClient") -> dic
         f"Resume:\n{resume_text[:3000]}"
     )
     try:
-        raw = ai.generate(system, user).strip()
+        raw = ai.generate(system, user, _endpoint="analyze").strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         result = json.loads(raw)
@@ -306,6 +306,7 @@ def _resolve_company_domain(company_name: str,
                 "No protocol, no path, no explanation. "
                 "If you are not confident, reply with the single word: unknown",
                 f"What is the official website domain for this company: {company_name}",
+                _endpoint="analyze",
             ).strip().lower()
             raw = re.sub(r"^https?://", "", raw).split("/")[0].strip(".")
             if raw and raw != "unknown" and re.match(r"^[a-z0-9][a-z0-9.\-]+\.[a-z]{2,}$", raw):
@@ -412,7 +413,7 @@ def research_company(domain: str, company_name: str, ai: "AIClient") -> dict:
     )
 
     try:
-        raw = ai.generate(system, user).strip()
+        raw = ai.generate(system, user, _endpoint="analyze").strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         return json.loads(raw)

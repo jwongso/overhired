@@ -865,7 +865,7 @@ def _phase1_extract(domain: str, page_text: str, ai: "AIClient") -> dict:
     _log.info("[phase1] extracting from %s (%d chars)", domain, len(page_text))
     t0 = time.monotonic()
     try:
-        raw = ai.generate(_EXTRACT_SYSTEM, user, timeout=ai.tool_timeout)
+        raw = ai.generate(_EXTRACT_SYSTEM, user, timeout=ai.tool_timeout, _endpoint="extract")
     except Exception as exc:
         _log.warning("[phase1] LLM call failed: %s", exc)
         return dict(_EMPTY)
@@ -917,7 +917,7 @@ def _phase2_generate(domain: str, page_text: str, confirmed: dict,
     _log.info("[phase2] generating parser for %s (title=%r)", domain, confirmed.get("title"))
     t0 = time.monotonic()
     try:
-        raw = ai.generate(system, user, timeout=ai.tool_timeout)
+        raw = ai.generate(system, user, timeout=ai.tool_timeout, _endpoint="extract")
     except Exception as exc:
         _log.warning("[phase2] LLM call failed: %s", exc)
         return None
@@ -988,7 +988,7 @@ def _phase3_validate_and_fix(domain: str, page_text: str, confirmed: dict,
         )
         try:
             t0 = time.monotonic()
-            raw = ai.generate(fix_system, fix_user, timeout=ai.tool_timeout)
+            raw = ai.generate(fix_system, fix_user, timeout=ai.tool_timeout, _endpoint="extract")
             _log.info("[phase3] fix LLM replied in %.1fs", time.monotonic() - t0)
             raw = _strip_think(raw)
             fixed = _parse_python_block(raw)

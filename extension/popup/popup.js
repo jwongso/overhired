@@ -447,9 +447,11 @@ function GenerateTab({ settings, health }) {
           role:              title,
           cover_letter_md:   resp.cover_letter_md,
           cover_letter_html: resp.cover_letter_html,
-          domain:            jobDomain   || '',
-          job_description:   desc        || '',
+          domain:            jobDomain        || '',
+          job_description:   desc             || '',
           resume_text:       '',
+          ai_provider:       settings?.provider  || health?.ai_provider || '',
+          ai_model:          settings?.model     || health?.ai_model    || '',
         }),
       }).then(async r => {
         if (!r.ok) return;
@@ -703,6 +705,8 @@ function App() {
     return () => clearInterval(timer);
   }, []);
 
+  const statsUrl = `${companionUrl(settings)}/stats`;
+
   return html`
     <div>
       <div class="header">
@@ -714,6 +718,13 @@ function App() {
 
       <${CompanionBanner} health=${health} />
       <${GenerateTab} settings=${settings} health=${health} />
+
+      <div style="padding:10px 14px;border-top:1px solid var(--border)">
+        <button class="btn btn-secondary btn-full" style="font-size:11px;padding:6px"
+          onClick=${() => chrome.tabs.create({ url: statsUrl })}>
+          Show Usage Stats
+        </button>
+      </div>
     </div>`;
 }
 

@@ -21,6 +21,19 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+
+def _log_usage(provider: str, model: str, endpoint: str, usage: dict) -> None:
+    """Fire-and-forget token usage logging to SQLite. Silently ignores errors."""
+    try:
+        import tracker
+        tracker.log_token_usage(
+            provider=provider, model=model, endpoint=endpoint,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+        )
+    except Exception:
+        pass
+
 OLLAMA_DEFAULT_ENDPOINT = "http://localhost:11434"
 OPENAI_DEFAULT_ENDPOINT = "https://api.openai.com"
 CLAUDE_DEFAULT_ENDPOINT = "https://api.anthropic.com"
@@ -68,11 +81,19 @@ class AIClient:
 
     # ── Public ────────────────────────────────────────────────────────────────
 
-    def generate(self, system_prompt: str, user_prompt: str, *, timeout: float | None = None) -> str:
-        """Send a chat request and return the assistant reply as a string."""
+    def generate(
+        self, system_prompt: str, user_prompt: str, *, timeout: float | None = None,
+        _endpoint: str = "generate",
+    ) -> str:
+        """Send a chat request and return the assistant reply as a string.
+
+        Token usage is automatically logged to SQLite via tracker.log_token_usage.
+        Use _endpoint to tag the call site (e.g. 'generate', 'extract', 'analyze').
+        """
         if self.provider == "claude":
-            return self._claude(system_prompt, user_prompt)
-        return self._openai_compatible(system_prompt, user_prompt, timeout=timeout)
+            return self._claude(system_prompt, user_prompt, _endpoint=_endpoint)
+        return self._openai_compatible(system_prompt, user_prompt, timeout=timeout,
+                                       _endpoint=_endpoint)
 
     def generate_with_tools(
         self,
@@ -200,7 +221,7 @@ class AIClient:
             )
             r = httpx.get(f"{self.endpoint}/v1/models", headers=headers, timeout=5)
             if 200 <= r.status_code < 300:
-                if self.provider == "claude":
+                if self.provider in ("claude", "openai"):
                     return True, self.model
                 models = r.json().get("data", [])
                 model_name = models[0].get("id", self.model) if models else self.model
@@ -211,7 +232,8 @@ class AIClient:
 
     # ── OpenAI-compatible (Ollama, llama.cpp, OpenAI) ────────────────────────
 
-    def _openai_compatible(self, system: str, user: str, *, timeout: float | None = None) -> str:
+    def _openai_compatible(self, system: str, user: str, *, timeout: float | None = None,
+                           _endpoint: str = "generate") -> str:
         url = f"{self.endpoint}/v1/chat/completions"
         t = timeout if timeout is not None else self.timeout
         payload = {
@@ -245,14 +267,19 @@ class AIClient:
         elapsed = time.monotonic() - t0
         data = resp.json()
 
-        # Log Ollama eval stats when available
-        if "eval_count" in data or "prompt_eval_count" in data:
+        usage = data.get("usage", {})
+        prompt_tokens     = usage.get("prompt_tokens")     or data.get("prompt_eval_count", 0)
+        completion_tokens = usage.get("completion_tokens") or data.get("eval_count", 0)
+
+        if data.get("eval_count") or data.get("prompt_eval_count"):
             logger.info("[llm] ollama stats: prompt_tokens=%s eval_tokens=%s elapsed=%.1fs",
-                        data.get("prompt_eval_count", "?"),
-                        data.get("eval_count", "?"),
-                        elapsed)
+                        prompt_tokens, completion_tokens, elapsed)
         else:
-            logger.info("[llm] generate done in %.1fs", elapsed)
+            logger.info("[llm] generate done in %.1fs prompt_tokens=%s completion_tokens=%s",
+                        elapsed, prompt_tokens, completion_tokens)
+
+        _log_usage(self.provider, self.model, _endpoint,
+                   {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens})
 
         try:
             reply = data["choices"][0]["message"]["content"].strip()
@@ -313,14 +340,19 @@ class AIClient:
         elapsed = time.monotonic() - t0
         data = resp.json()
 
-        # Log Ollama eval stats when available
-        if "eval_count" in data or "prompt_eval_count" in data:
+        usage = data.get("usage", {})
+        prompt_tokens     = usage.get("prompt_tokens")     or data.get("prompt_eval_count", 0)
+        completion_tokens = usage.get("completion_tokens") or data.get("eval_count", 0)
+
+        if data.get("eval_count") or data.get("prompt_eval_count"):
             logger.info("[llm] tool-call done: elapsed=%.1fs prompt_tokens=%s eval_tokens=%s",
-                        elapsed,
-                        data.get("prompt_eval_count", "?"),
-                        data.get("eval_count", "?"))
+                        elapsed, prompt_tokens, completion_tokens)
         else:
-            logger.info("[llm] tool-call done in %.1fs", elapsed)
+            logger.info("[llm] tool-call done in %.1fs prompt_tokens=%s completion_tokens=%s",
+                        elapsed, prompt_tokens, completion_tokens)
+
+        _log_usage(self.provider, self.model, "extract",
+                   {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens})
 
         try:
             choice  = data["choices"][0]
@@ -356,7 +388,7 @@ class AIClient:
 
     # ── Anthropic Claude ─────────────────────────────────────────────────────
 
-    def _claude(self, system: str, user: str) -> str:
+    def _claude(self, system: str, user: str, *, _endpoint: str = "generate") -> str:
         url = f"{self.endpoint}/v1/messages"
         payload = {
             "model": self.model,
@@ -381,6 +413,13 @@ class AIClient:
             raise AIError(f"Cannot connect to Claude endpoint {self.endpoint}.")
 
         data = resp.json()
+        usage = data.get("usage", {})
+        prompt_tokens     = usage.get("input_tokens", 0)
+        completion_tokens = usage.get("output_tokens", 0)
+        logger.info("[llm] claude done: prompt_tokens=%s completion_tokens=%s",
+                    prompt_tokens, completion_tokens)
+        _log_usage(self.provider, self.model, _endpoint,
+                   {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens})
         try:
             return data["content"][0]["text"].strip()
         except (KeyError, IndexError) as exc:

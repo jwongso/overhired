@@ -706,7 +706,7 @@ function App() {
   return html`
     <div>
       <div class="header">
-        <div class="logo">over<span>hired</span></div>
+        <div class="logo">gr<span>apply</span></div>
         <span class="pill ${health ? 'pill-ok' : health === undefined ? 'pill-loading' : 'pill-err'}">
           ${health ? 'online' : health === undefined ? '...' : 'offline'}
         </span>

@@ -42,13 +42,16 @@ import ai_client as ai_module
 
 # ── Boot ─────────────────────────────────────────────────────────────────────
 
+_LOG_PATH = Path("~/.grapply/companion.log").expanduser()
+_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     force=True,  # prevent uvicorn from adding duplicate handlers
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(Path("~/.grapply/companion.log").expanduser(), mode="a"),
+        logging.FileHandler(_LOG_PATH, mode="a"),
     ],
 )
 # Suppress noisy low-level HTTP transport loggers — only our own code should emit DEBUG

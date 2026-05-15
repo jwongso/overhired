@@ -6,12 +6,10 @@ set -e
 PORT=7878
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Kill stale process if port is busy
-STALE=$(lsof -ti:"$PORT" 2>/dev/null || true)
-if [ -n "$STALE" ]; then
-    echo "Killing stale process on port $PORT (PID $STALE)..."
-    kill "$STALE"
-    sleep 1
+# If port is already in use, assume companion is running — leave it alone
+if lsof -ti:"$PORT" > /dev/null 2>&1; then
+    echo "Companion already running on port $PORT — nothing to do."
+    exit 0
 fi
 
 echo "Starting companion on http://127.0.0.1:$PORT ..."

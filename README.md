@@ -23,6 +23,7 @@
 - **Local-first AI** — defaults to [Ollama](https://ollama.com); OpenAI and Claude supported
 - **Privacy by design** — resume stays on disk; only job text reaches the AI
 - **Feng shui panel** — daily lucky day + best interview dates 🈴
+- **Usage stats dashboard** — live cost and token tracking per provider/model/endpoint, accessible at `http://localhost:7878/stats`
 
 ---
 
@@ -154,7 +155,7 @@ graph TB
     end
 
     subgraph Disk["Disk"]
-        OUT["~/Documents/job-applications/\nCompany/Role/\n  cover_letter.md · insight.md\n  score.md · summary.md"]
+        OUT["~/Documents/job-applications/\nCompany/Role/Provider/Model/\n  cover_letter.md · insight.md\n  score.md · summary.md"]
         RESUME["~/Documents/resume.pdf"]
         CONFIG["~/.grapply/config.toml"]
     end
@@ -323,9 +324,27 @@ sequenceDiagram
 
 ---
 
+## Usage Stats Dashboard
+
+The companion serves a live cost and token tracking dashboard at `http://localhost:7878/stats`. Click **Show Usage Stats** at the bottom of the extension popup to open it.
+
+The dashboard shows:
+
+- **Summary cards** — total calls, tokens, estimated cost, avg cost per cover letter
+- **Daily cost chart** — token spend over time with call volume overlay
+- **Endpoint breakdown** — donut chart of generate / extract / analyze calls
+- **Model cost bar** — cost comparison across providers and models
+- **Insights panel** — best value model, avg cost per cover letter, cache efficiency
+- **Breakdown table** — per provider/model/endpoint with avg cost per call
+
+Time filters: Today / 7 days / 30 days / All time. Auto-refreshes every 30 seconds.
+
+---
+
 ## Output Files
 
-After each application, the companion writes to `~/Documents/job-applications/<Company>/<Role>/`:
+After each application, the companion writes to `~/Documents/job-applications/<Company>/<Role>/<provider>/<model>/`:
+
 
 | File | Contents |
 |------|----------|

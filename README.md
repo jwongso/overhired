@@ -2,6 +2,8 @@
 
 > Grab and Apply
 
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-support%20grapply-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/grapplyai)
+
 **grapply** is a browser extension + local companion service that reads any job posting, generates a personalized cover letter using your local LLM or online AI provider (Anthropic or OpenAI), and produces a full analysis package — cover letter, job fit score, company summary, and jargon decoder — saved to disk automatically.
 
 <table><tr>

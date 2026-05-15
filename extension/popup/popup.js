@@ -8,7 +8,7 @@ import htm                 from '../vendor/htm.module.js';
 
 const html = htm.bind(h);
 
-const AUSPICE_URL = 'https://fengshui.grapply.work';
+const AUSPICE_URL = 'https://fengshui.overhired.work';
 
 async function fetchAuspice() {
   // Use local date strings (en-CA locale gives YYYY-MM-DD) so timezone is correct.

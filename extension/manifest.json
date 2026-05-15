@@ -15,7 +15,7 @@
     "<all_urls>",
     "http://localhost:*/*",
     "http://127.0.0.1:*/*",
-    "https://fengshui.grapply.work/*"
+    "https://fengshui.overhired.work/*"
   ],
 
   "background": {

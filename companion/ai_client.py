@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -100,22 +101,37 @@ class AIClient:
         last_text: str = ""
 
         for i in range(max_iters):
+            t_iter = time.monotonic()
             response = self._call_with_tools(messages, tools)
             assistant_msg = response["content"]
             tool_calls = response.get("tool_calls", [])
-            # Capture plain-text content for fallback extraction
             last_text = assistant_msg.get("content") or ""
+            iter_elapsed = time.monotonic() - t_iter
 
-            logger.info("[tools] iter=%d tool_calls=%s", i + 1,
-                        [tc["name"] for tc in tool_calls])
+            logger.info("[tools] iter=%d elapsed=%.1fs tool_calls=%s text=%r",
+                        i + 1, iter_elapsed,
+                        [tc["name"] for tc in tool_calls],
+                        last_text if last_text else "")
 
-            # Append assistant turn (with or without tool_calls)
+            # Log each tool call's arguments so we can see what the LLM generated
+            for tc in tool_calls:
+                args = tc["arguments"]
+                if tc["name"] == "run_parser":
+                    code_preview = args.get("code", "").replace("\n", "↵")
+                    logger.debug("[tools]   run_parser code_preview=%r", code_preview)
+                elif tc["name"] == "save_parser":
+                    logger.info("[tools]   save_parser domain=%r", args.get("domain"))
+                else:
+                    logger.debug("[tools]   %s args=%r", tc["name"], str(args))
+
             messages.append(assistant_msg)
 
             if not tool_calls:
+                logger.info("[tools] iter=%d — no tool calls, LLM stopped (finish_reason=%r)",
+                            i + 1, response.get("stop_reason"))
                 break
 
-            # Execute each requested tool call and feed results back
+            # Execute each tool call, log arguments + result
             for tc in tool_calls:
                 fn = tool_functions.get(tc["name"])
                 if fn is None:
@@ -127,9 +143,20 @@ class AIClient:
                         result = {"error": str(exc)}
 
                 last_result = result
+
+                # Log tool result
+                if tc["name"] == "run_parser":
+                    logger.info("[tools]   run_parser result: title=%r company=%r location=%r err=%r",
+                                result.get("title", ""),
+                                result.get("company", ""),
+                                result.get("location", ""),
+                                result.get("error", ""))
+                else:
+                    logger.info("[tools]   %s result=%r", tc["name"], str(result))
+
                 if tc["name"].startswith("save_"):
                     saved = True
-                    logger.info("[tools] %s called — domain arg=%s", tc["name"],
+                    logger.info("[tools] save_parser called — domain=%s parser saved ✓",
                                 tc["arguments"].get("domain", "<missing>"))
 
                 messages.append({
@@ -187,36 +214,41 @@ class AIClient:
             "temperature": 0.7,
             "stream": False,
         }
-        # Qwen3 and other reasoning models expose chain-of-thought tokens by
-        # default.  Suppress them so they don't bleed into the cover letter.
-        # Ollama accepts "think": false at the top level of the request body.
         if self.provider == "ollama":
-            payload["think"] = False
+            payload["think"] = True   # expose chain-of-thought in companion.log
+
+        logger.debug("[llm] generate request model=%s timeout=%ss prompt_chars=%d",
+                     self.model, t, len(system) + len(user))
+        logger.debug("[llm] system_prompt=%r", system)
+        logger.debug("[llm] user_prompt=%r", user)
+
+        t0 = time.monotonic()
         try:
-            resp = httpx.post(
-                url,
-                headers=self._openai_headers(),
-                json=payload,
-                timeout=t,
-            )
+            resp = httpx.post(url, headers=self._openai_headers(), json=payload, timeout=t)
             resp.raise_for_status()
         except httpx.TimeoutException:
-            raise AIError(
-                f"AI request timed out after {t}s. "
-                "Is Ollama running? Try: ollama serve"
-            )
+            raise AIError(f"AI request timed out after {t}s. Is Ollama running? Try: ollama serve")
         except httpx.HTTPStatusError as exc:
-            raise AIError(f"AI provider returned {exc.response.status_code}: "
-                          f"{exc.response.text[:300]}")
+            raise AIError(f"AI provider returned {exc.response.status_code}: {exc.response.text[:300]}")
         except httpx.ConnectError:
-            raise AIError(
-                f"Cannot connect to AI endpoint {self.endpoint}. "
-                "Start Ollama with: ollama serve"
-            )
+            raise AIError(f"Cannot connect to AI endpoint {self.endpoint}. Start Ollama with: ollama serve")
 
+        elapsed = time.monotonic() - t0
         data = resp.json()
+
+        # Log Ollama eval stats when available
+        if "eval_count" in data or "prompt_eval_count" in data:
+            logger.info("[llm] ollama stats: prompt_tokens=%s eval_tokens=%s elapsed=%.1fs",
+                        data.get("prompt_eval_count", "?"),
+                        data.get("eval_count", "?"),
+                        elapsed)
+        else:
+            logger.info("[llm] generate done in %.1fs", elapsed)
+
         try:
-            return data["choices"][0]["message"]["content"].strip()
+            reply = data["choices"][0]["message"]["content"].strip()
+            logger.debug("[llm] reply=%r", reply)
+            return reply
         except (KeyError, IndexError) as exc:
             raise AIError(f"Unexpected response shape: {exc}\n{json.dumps(data)[:300]}")
 
@@ -240,14 +272,26 @@ class AIClient:
             "stream":      False,
         }
         if self.provider == "ollama":
-            payload["think"] = False
+            payload["think"] = True   # expose chain-of-thought in companion.log
+
+        msg_summary = [{"role": m["role"], "chars": len(str(m.get("content", "")))}
+                       for m in messages]
+        logger.debug("[llm] tool-call request model=%s timeout=%ss messages=%s tools=%s",
+                     self.model, self.tool_timeout,
+                     msg_summary,
+                     [t["function"]["name"] for t in tools])
+
+        # Log the last user/tool message fully so we can see what context LLM has
+        for m in reversed(messages):
+            if m["role"] in ("user", "tool"):
+                logger.debug("[llm] last context message role=%s content=%r",
+                             m["role"], str(m.get("content", "")))
+                break
+
+        t0 = time.monotonic()
         try:
-            resp = httpx.post(
-                url,
-                headers=self._openai_headers(),
-                json=payload,
-                timeout=self.tool_timeout,
-            )
+            resp = httpx.post(url, headers=self._openai_headers(), json=payload,
+                              timeout=self.tool_timeout)
             resp.raise_for_status()
         except httpx.TimeoutException:
             raise AIError(f"Tool-use request timed out after {self.tool_timeout}s.")
@@ -257,11 +301,35 @@ class AIClient:
         except httpx.ConnectError:
             raise AIError(f"Cannot connect to AI endpoint {self.endpoint}.")
 
+        elapsed = time.monotonic() - t0
         data = resp.json()
+
+        # Log Ollama eval stats when available
+        if "eval_count" in data or "prompt_eval_count" in data:
+            logger.info("[llm] tool-call done: elapsed=%.1fs prompt_tokens=%s eval_tokens=%s",
+                        elapsed,
+                        data.get("prompt_eval_count", "?"),
+                        data.get("eval_count", "?"))
+        else:
+            logger.info("[llm] tool-call done in %.1fs", elapsed)
+
         try:
             choice  = data["choices"][0]
             message = choice["message"]
             raw_tcs = message.get("tool_calls") or []
+
+            # Log assistant text reply if any
+            text_content = message.get("content") or ""
+            if text_content:
+                logger.debug("[llm] assistant text=%r", text_content)
+
+            # Log each raw tool call from the LLM
+            for tc in raw_tcs:
+                fn_name = tc["function"]["name"]
+                fn_args_raw = tc["function"]["arguments"]
+                logger.debug("[llm] raw tool_call: name=%r arguments=%r",
+                             fn_name, fn_args_raw)
+
             return {
                 "stop_reason": "tool_use" if raw_tcs else choice.get("finish_reason", "stop"),
                 "content":     message,

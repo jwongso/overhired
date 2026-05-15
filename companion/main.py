@@ -43,10 +43,22 @@ import ai_client as ai_module
 # ── Boot ─────────────────────────────────────────────────────────────────────
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    stream=sys.stdout,
+    force=True,  # prevent uvicorn from adding duplicate handlers
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(Path("~/.overhired/companion.log").expanduser(), mode="a"),
+    ],
 )
+# Suppress noisy low-level HTTP transport loggers — only our own code should emit DEBUG
+for _noisy in (
+    "httpcore", "httpcore.http11", "httpcore.http2",
+    "httpcore.connection", "httpcore.connection_pool",
+    "httpcore.proxy", "httpcore.socks",
+    "httpx", "uvicorn.access",
+):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 CFG = cfg_module.load()
@@ -542,8 +554,9 @@ def extract_job(req: ExtractRequest, _: None = Depends(_require_token)):
     mode   = extractor.detect_mode(req.page_html, req.domain, req.url)
     result = extractor.extract(req.domain, req.page_text, AI, page_html=req.page_html)
     result["mode"] = mode
-    logger.info("[extract] result: title=%r company=%r mode=%s",
-                result.get("title",""), result.get("company",""), mode)
+    logger.info("[extract] result: title=%r company=%r parser_cached=%s",
+                result.get("title", ""), result.get("company", ""),
+                bool((extractor.PARSERS_DIR / f"{req.domain}.py").exists()))
     return ExtractResponse(**result)
 
 
@@ -820,6 +833,7 @@ def main() -> None:
         port=args.port,
         reload=args.reload,
         log_level=args.log_level,
+        log_config=None,  # don't let uvicorn override our logging setup
     )
 
 

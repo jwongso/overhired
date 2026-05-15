@@ -133,17 +133,24 @@ _SAFE_BUILTINS = {
     "AssertionError",
 }
 
+# Standard library modules that are safe to import in parser code
+_ALLOWED_IMPORTS = frozenset({"re", "json", "html", "string", "unicodedata"})
+
 
 def _restricted_globals() -> dict:
-    """Minimal __builtins__ — no file I/O, no subprocess, no imports."""
+    """Minimal __builtins__ — no file I/O, no subprocess, only safe stdlib imports."""
     import builtins
     safe = {name: getattr(builtins, name) for name in _SAFE_BUILTINS if hasattr(builtins, name)}
-    safe["__import__"] = _blocked_import
+    safe["__import__"] = _safe_import
     return {"__builtins__": safe}
 
 
-def _blocked_import(name: str, *args: Any, **kwargs: Any) -> None:
-    raise ImportError(f"import '{name}' is not allowed in parser code")
+def _safe_import(name: str, *args: Any, **kwargs: Any) -> Any:
+    root = name.split(".")[0]
+    if root not in _ALLOWED_IMPORTS:
+        raise ImportError(f"import '{name}' is not allowed in parser code")
+    import importlib
+    return importlib.import_module(name)
 
 
 def run_parser(code: str, text: str) -> dict:

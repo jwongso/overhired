@@ -278,11 +278,11 @@ def log_strategy_run(domain: str, results: list[dict], selected: str) -> None:
         )
 
 
-def get_best_strategy(domain: str, min_runs: int = 2) -> str | None:
+def get_best_strategy(domain: str, min_runs: int = 1) -> str | None:
     """Return the historically best strategy for a domain, or None if not enough data.
 
-    Ranks by average score across all recorded runs where that strategy was selected.
-    Requires at least min_runs benchmarks before trusting the catalog.
+    Ranks by average score. Only considers strategies with avg_score > 0
+    so zero-scoring stale entries never override a working strategy.
     """
     with _db() as conn:
         row = conn.execute(
@@ -291,7 +291,7 @@ def get_best_strategy(domain: str, min_runs: int = 2) -> str | None:
             FROM html_strategy_stats
             WHERE domain = ?
             GROUP BY strategy
-            HAVING runs >= ?
+            HAVING runs >= ? AND avg_score > 0
             ORDER BY avg_score DESC
             LIMIT 1
             """,

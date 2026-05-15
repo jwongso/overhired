@@ -16,16 +16,18 @@ HTML cleaning strategies (applied server-side, ranked by quality score):
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import re
+import threading as _threading
 import time
 import traceback
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from tool_server import PARSERS_DIR, TOOLS, TOOL_FUNCTIONS, _restricted_globals
+from tool_server import PARSERS_DIR, _restricted_globals
 
 if TYPE_CHECKING:
     from ai_client import AIClient
@@ -57,7 +59,8 @@ _JOB_SIGNALS = re.compile(
 
 # Content container selectors tried in order for the content_area strategy
 _CONTENT_SELECTORS = [
-    r'data-automation="jobAdDetails"',         # SEEK
+    r'data-automation="jobDetailsPage"',        # SEEK (full job page: title + company + description)
+    r'data-automation="jobAdDetails"',          # SEEK (description-only fallback)
     r'data-automation-id="jobPostingDescription"',  # Workday
     r'class="[^"]*posting[^"]*"',              # Lever
     r'id="job-details"',
@@ -66,6 +69,14 @@ _CONTENT_SELECTORS = [
     r'<article',
     r'<main',
 ]
+
+
+_BLOCK_TAGS = frozenset({
+    "div", "p", "h1", "h2", "h3", "h4", "h5", "h6",
+    "li", "tr", "td", "section", "article", "header", "footer",
+    "main", "aside", "blockquote", "pre", "br", "hr",
+    "dl", "dt", "dd", "ol", "ul", "table", "thead", "tbody",
+})
 
 
 class _StripParser(HTMLParser):
@@ -78,12 +89,18 @@ class _StripParser(HTMLParser):
         self._drop = _DROP_TAGS | (_DROP_SECTIONAL if drop_sectional else frozenset())
 
     def handle_starttag(self, tag: str, _attrs: list) -> None:
-        if tag.lower() in self._drop:
+        t = tag.lower()
+        if t in self._drop:
             self._skip += 1
+        elif t in _BLOCK_TAGS and not self._skip:
+            self._parts.append("\n")
 
     def handle_endtag(self, tag: str) -> None:
-        if tag.lower() in self._drop:
+        t = tag.lower()
+        if t in self._drop:
             self._skip = max(0, self._skip - 1)
+        elif t in _BLOCK_TAGS and not self._skip:
+            self._parts.append("\n")
 
     def handle_data(self, data: str) -> None:
         if not self._skip:
@@ -92,8 +109,187 @@ class _StripParser(HTMLParser):
                 self._parts.append(s)
 
     def result(self) -> str:
-        return re.sub(r"\s{2,}", " ", " ".join(self._parts)).strip()
+        text = " ".join(self._parts)
+        # Collapse spaces around newlines, then collapse runs of blank lines
+        text = re.sub(r" *\n *", "\n", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return re.sub(r" {2,}", " ", text).strip()
 
+
+_NOISE_TAGS = re.compile(
+    r"<(script|style|svg|noscript|iframe|link|meta|head)[^>]*>.*?</\1>|"
+    r"<(script|style|svg|noscript|iframe|link|meta)[^>]*/?>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _strip_html_for_llm(html: str, max_chars: int = 15_000) -> str:
+    """Remove script/style/svg noise but keep HTML structure so the LLM
+    can see tags like <h1>, data-automation attributes, <p>, etc.
+    Truncated to max_chars to stay within LLM context limits.
+    """
+    stripped = _NOISE_TAGS.sub("", html)
+    # Collapse excessive whitespace between tags
+    stripped = re.sub(r">\s{2,}<", ">\n<", stripped)
+    stripped = re.sub(r"\s{3,}", " ", stripped)
+    return stripped[:max_chars]
+
+
+# ── Semantic HTML skeleton ────────────────────────────────────────────────────
+
+# HTML5 void elements — no closing tag, must never affect _skip counter
+_HTML_VOID = frozenset({
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+    # SVG path elements that are commonly self-closing in practice
+    "path", "circle", "ellipse", "line", "polygon", "polyline", "rect", "use",
+})
+
+# Tags whose attributes/classes are useful for parser writers
+_SKELETON_KEEP_TAGS = frozenset({
+    "h1", "h2", "h3", "h4", "h5", "h6",
+    "title", "article", "section", "main", "header",
+    "div", "span", "p", "li", "td", "th",
+    "a", "time", "address", "label",
+})
+# Tags we drop entirely (no useful text or structure)
+_SKELETON_DROP_TAGS = frozenset({
+    "script", "style", "svg", "noscript", "iframe",
+    "link", "meta",  # keep <head> and <title> so page title is visible
+    "picture", "source",
+    "video", "audio", "canvas", "object", "embed", "template",
+})
+# Attrs to keep on skeleton elements (everything else stripped)
+_SKELETON_KEEP_ATTRS = frozenset({
+    "id", "class", "data-automation", "data-automation-id",
+    "data-job-id", "itemprop", "itemtype",
+    "href",  # keep on <a> so domain is visible
+})
+
+_TEXT_SNIPPET_LEN = 120   # chars of text to preserve per element
+
+
+class _SkeletonBuilder(HTMLParser):
+    """Produce a compact, human-readable DOM skeleton.
+
+    Each element that contains meaningful text is rendered as:
+        <tag class="..." id="...">text snippet...</tag>
+
+    - Script/style/noise subtrees are dropped entirely.
+    - Deeply nested empty elements are suppressed.
+    - Output is ASCII-safe (non-ASCII chars kept as-is) and stays under
+      max_chars characters.
+
+    Example output for a LinkedIn job page (~40 lines, ~2 KB):
+        <title>Senior C++ Engineer | EA SPORTS | LinkedIn</title>
+        <h1 class="top-card-layout__title">Senior C++ Generalist Software Engineer</h1>
+        <span class="topcard__org-name-link">EA SPORTS</span>
+        <span class="topcard__flavor--bullet">Vancouver, BC</span>
+        <div class="show-more-less-html__markup">Description & Requirements...</div>
+    """
+
+    def __init__(self, max_chars: int = 25_000) -> None:
+        super().__init__(convert_charrefs=True)
+        self._skip     = 0          # nesting depth inside dropped subtrees
+        self._buf: list[str] = []
+        self._max      = max_chars
+        self._total    = 0
+        self._tag_stack: list[tuple[str, str]] = []   # (tag, rendered_open_tag)
+        self._cur_text : list[str] = []               # text accumulator for current element
+        self._done     = False
+
+    def _filtered_attrs(self, attrs: list) -> str:
+        kept = [(k, v) for k, v in attrs
+                if k in _SKELETON_KEEP_ATTRS and v and v.strip()]
+        if not kept:
+            return ""
+        return " " + " ".join(f'{k}="{v}"' for k, v in kept[:4])  # cap at 4 attrs
+
+    def _flush_element(self) -> None:
+        """Write accumulated text for the current open element."""
+        if not self._tag_stack:
+            return
+        tag, open_tag = self._tag_stack[-1]
+        if tag not in _SKELETON_KEEP_TAGS:
+            return
+        text = " ".join(self._cur_text).strip()
+        if not text:
+            return
+        snippet = text[:_TEXT_SNIPPET_LEN]
+        if len(text) > _TEXT_SNIPPET_LEN:
+            snippet += "…"
+        line = f"{open_tag}{snippet}</{tag}>\n"
+        if self._total + len(line) > self._max:
+            self._done = True
+            return
+        self._buf.append(line)
+        self._total += len(line)
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        if self._done:
+            return
+        t = tag.lower()
+        # Void elements never have a closing tag — skip them entirely to avoid
+        # corrupting the _skip counter (they'd increment without a matching decrement)
+        if t in _HTML_VOID:
+            return
+        if t in _SKELETON_DROP_TAGS or self._skip > 0:
+            self._skip += 1
+            return
+        attr_str = self._filtered_attrs(attrs)
+        open_tag = f"<{t}{attr_str}>"
+        self._tag_stack.append((t, open_tag))
+        self._cur_text = []
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._done:
+            return
+        t = tag.lower()
+        if t in _HTML_VOID:
+            return  # void elements have no closing tag — ignore stray ones
+        if self._skip > 0:
+            # Decrement for ANY non-void closing tag (not just DROP tags)
+            # so we correctly exit nested drop subtrees
+            self._skip -= 1
+            return
+        if self._tag_stack and self._tag_stack[-1][0] == t:
+            self._flush_element()
+            self._tag_stack.pop()
+            self._cur_text = []
+
+    def handle_data(self, data: str) -> None:
+        if self._done or self._skip > 0:
+            return
+        s = data.strip()
+        if s and len(s) > 1:  # skip single chars like punctuation noise
+            self._cur_text.append(s)
+
+    def result(self) -> str:
+        return "".join(self._buf)
+
+
+def html_skeleton(html: str, max_chars: int = 25_000) -> str:
+    """Return a compact semantic skeleton of the HTML page.
+
+    The skeleton preserves tag names, meaningful CSS classes/IDs, and short
+    text snippets.  Noise (scripts, styles, SVG, empty elements) is removed.
+
+    This is used as input for LLM-based parser generation:
+      - Smaller than raw HTML (2.7MB LinkedIn → ~15–30KB)
+      - Preserves enough structure to write CSS-selector-style parsers
+      - Gives the LLM class names it can use in regex patterns
+
+    Returns empty string if parsing fails (caller falls back to clean text).
+    """
+    try:
+        builder = _SkeletonBuilder(max_chars=max_chars)
+        builder.feed(html)
+        result = builder.result()
+        _log.debug("[skeleton] %d raw chars → %d skeleton chars", len(html), len(result))
+        return result
+    except Exception as exc:
+        _log.warning("[skeleton] failed: %s", exc)
+        return ""
 
 def _strategy_strip_all(html: str) -> str:
     """Drop script/style/nav/footer/svg, extract all remaining text."""
@@ -192,7 +388,163 @@ def _quality_score(text: str) -> float:
     return (signal_density * 2 + length_factor + word_penalty) / 4
 
 
+def _format_job_text(title: str, company: str, location: str, desc: str) -> str:
+    """Produce a consistent plain-text layout used by every structured strategy.
+
+    Format (parsers can rely on this):
+        {title}
+        {company}
+        {location}          ← omitted if empty
+
+        Job description:
+        {description}
+    """
+    parts: list[str] = []
+    if title:    parts.append(title)
+    if company:  parts.append(company)
+    if location: parts.append(location)
+    parts.append("")
+    parts.append("Job description:")
+    if desc:     parts.append(desc)
+    return "\n".join(parts)
+
+
+def _strategy_seek(html: str) -> str:
+    """Extract job data from SEEK's inline JavaScript data blob.
+
+    SEEK embeds structured job data as a JSON object in a <script> tag
+    containing both 'jobTitle' and 'advertiserName'.
+    """
+    import json as _json
+    scripts = re.findall(r"<script[^>]*>(.*?)</script>", html, re.DOTALL)
+    for s in scripts:
+        if '"jobTitle"' not in s or '"advertiserName"' not in s:
+            continue
+
+        title_m   = re.search(r'"jobTitle"\s*:\s*"([^"]+)"', s)
+        company_m = re.search(r'"advertiserName"\s*:\s*"([^"]+)"', s)
+        if not (title_m and company_m):
+            continue
+
+        title   = title_m.group(1).strip()
+        company = company_m.group(1).strip()
+
+        loc_m    = re.search(r'"location"\s*:\s*"([^"]+)"', s)
+        location = loc_m.group(1).strip() if loc_m else ""
+
+        # Description: pick the longest decodable content/content2 field
+        desc = ""
+        for key_pat in (r'"content2?"', r'"content"', r'"content2"'):
+            for raw_val in re.findall(
+                key_pat + r'\s*:\s*("(?:[^"\\]|\\.)*")', s
+            ):
+                try:
+                    val = _json.loads(raw_val)
+                except _json.JSONDecodeError:
+                    continue
+                # SEEK sometimes uses Unicode escapes for HTML tags
+                if "\\u003C" in raw_val:
+                    val = val.encode().decode("unicode_escape",
+                                              errors="replace")
+                if ("<p>" in val or "<br>" in val or "\\u003C" in val
+                        or "Job description" in val):
+                    cleaned = re.sub(r"<[^>]+>", " ", val)
+                    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+                    if len(cleaned) > len(desc):
+                        desc = cleaned
+
+        if not title:
+            continue
+        return _format_job_text(title, company, location, desc)
+    return ""
+
+
+def _strategy_jsonld(html: str) -> str:
+    """Extract job data from JSON-LD <script type="application/ld+json"> blocks.
+
+    Works for Indeed and any site that embeds a JobPosting schema.
+    """
+    import json as _json
+    blocks = re.findall(
+        r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        html, re.DOTALL | re.IGNORECASE,
+    )
+    for raw in blocks:
+        try:
+            d = _json.loads(raw.strip())
+        except _json.JSONDecodeError:
+            continue
+        if d.get("@type") != "JobPosting":
+            continue
+
+        title   = d.get("title", "").strip()
+        company = (d.get("hiringOrganization") or {}).get("name", "").strip()
+        loc_obj = d.get("jobLocation") or {}
+        addr    = loc_obj.get("address") or {} if isinstance(loc_obj, dict) else {}
+        location = (addr.get("addressLocality") or addr.get("addressRegion") or
+                    addr.get("addressCountry") or "").strip()
+        desc_html = d.get("description", "")
+        desc = re.sub(r"<[^>]+>", " ", desc_html)
+        desc = re.sub(r"\s{2,}", " ", desc).strip()
+
+        if not title:
+            continue
+        return _format_job_text(title, company, location, desc)
+    return ""
+
+
+def _strategy_linkedin(html: str) -> str:
+    """Extract job data from a LinkedIn job page saved as HTML.
+
+    LinkedIn stores title and company in the <title> tag as
+    'Title | Company | LinkedIn', and the description after
+    'About the job'.
+    """
+    import html as _html_mod
+
+    # Title and company from <title> tag (use the first job-specific one)
+    titles = re.findall(r'<title>([^<]+)</title>', html)
+    job_title_tag = next(
+        (t for t in titles
+         if "LinkedIn" in t and t.count("|") >= 2),
+        None,
+    )
+    if not job_title_tag:
+        return ""
+    parts = [p.strip() for p in job_title_tag.split("|")]
+    # LinkedIn title format: "Title - DivisionName | Company | LinkedIn"
+    # Strip trailing "- DivisionGroup" suffix from the title part if present
+    raw_title = parts[0]
+    title_parts = raw_title.split(" - ")
+    title   = title_parts[0].strip()
+    company = parts[1] if len(parts) > 1 else ""
+
+    # Location: may be in a JSON state blob
+    loc_m = re.search(r'"formattedLocation"\s*:\s*"([^"]+)"', html)
+    location = loc_m.group(1).strip() if loc_m else ""
+
+    # Description: everything from "About the job" onward, HTML entities decoded
+    for marker in ("About the job", "About this role", "Job description"):
+        pos = html.find(marker)
+        if pos >= 0:
+            chunk = html[pos: pos + 12_000]
+            desc = re.sub(r"<[^>]+>", " ", chunk)
+            desc = _html_mod.unescape(desc)          # decode &amp; &lt; etc.
+            desc = re.sub(r"\s{2,}", " ", desc).strip()
+            desc = re.sub(rf"^{re.escape(marker)}\s*", "", desc).strip()
+            break
+    else:
+        desc = ""
+
+    if not title:
+        return ""
+    return _format_job_text(title, company, location, desc)
+
+
 _STRATEGIES = {
+    "seek":          _strategy_seek,
+    "jsonld":        _strategy_jsonld,
+    "linkedin":      _strategy_linkedin,
     "strip_all":     _strategy_strip_all,
     "content_area":  _strategy_content_area,
     "text_density":  _strategy_text_density,
@@ -227,18 +579,59 @@ def _run_all_strategies(html: str, max_chars: int) -> list[dict]:
     return results
 
 
+# Domains with a dedicated structured extraction strategy.
+# These always produce a stable _format_job_text 4-line output so parsers
+# trained on any page from that domain reliably generalise to all others.
+# Never let the catalog override these with a content_area / text_density winner.
+_DOMAIN_PINNED_STRATEGY: dict[str, str] = {
+    "nz.seek.com":     "seek",
+    "seek.com.au":     "seek",
+    "nz.indeed.com":   "jsonld",
+    "au.indeed.com":   "jsonld",
+    "indeed.com":      "jsonld",
+    "www.linkedin.com":"linkedin",
+    "linkedin.com":    "linkedin",
+}
+
+
 def clean_html(html: str, domain: str = "", max_chars: int = 12_000) -> str:
     """Clean HTML using the best strategy for this domain.
 
-    First visit: benchmarks all strategies, picks winner, logs to DB catalog.
-    Subsequent visits: uses historically best strategy directly (fast path).
-    Re-benchmarks every 10 runs to catch site changes.
+    Priority:
+      1. Pinned strategy  — domains with a dedicated structured extractor always
+                            use it so the output format is stable across pages.
+      2. Catalog winner   — historically best strategy from tracker DB (fast path).
+      3. Benchmark        — run all strategies, pick winner, save to catalog.
     """
     import tracker
-    best_strategy = tracker.get_best_strategy(domain) if domain else None
 
+    # ── 1. Pinned strategy (structured domains) ───────────────────────────────
+    pinned = _DOMAIN_PINNED_STRATEGY.get(domain.lower())
+    if pinned and pinned in _STRATEGIES:
+        t0 = time.perf_counter()
+        try:
+            text = _STRATEGIES[pinned](html)[:max_chars]
+        except Exception:
+            text = ""
+        elapsed = (time.perf_counter() - t0) * 1000
+        if text:
+            score = _quality_score(text)
+            _log.info("[clean_html] domain=%s pinned=%s score=%.3f time=%.1fms",
+                      domain, pinned, score, elapsed)
+            if domain:
+                tracker.log_strategy_run(
+                    domain,
+                    [{"strategy": pinned, "score": score,
+                      "length": len(text), "time_ms": elapsed}],
+                    pinned,
+                )
+            return text
+        _log.warning("[clean_html] pinned strategy %s returned empty for %s — falling through",
+                     pinned, domain)
+
+    # ── 2. Catalog winner (fast path) ─────────────────────────────────────────
+    best_strategy = tracker.get_best_strategy(domain) if domain else None
     if best_strategy and best_strategy in _STRATEGIES:
-        # Fast path: use catalog winner directly
         t0 = time.perf_counter()
         try:
             text = _STRATEGIES[best_strategy](html)[:max_chars]
@@ -248,7 +641,6 @@ def clean_html(html: str, domain: str = "", max_chars: int = 12_000) -> str:
         score = _quality_score(text)
         _log.info("[clean_html] domain=%s catalog=%s score=%.3f time=%.1fms",
                   domain, best_strategy, score, elapsed)
-        # Log this run so the catalog stays fresh
         if domain:
             tracker.log_strategy_run(
                 domain,
@@ -258,7 +650,7 @@ def clean_html(html: str, domain: str = "", max_chars: int = 12_000) -> str:
             )
         return text
 
-    # Benchmark path: try all strategies, pick best, save to catalog
+    # ── 3. Benchmark (first visit / unknown domain) ───────────────────────────
     results = _run_all_strategies(html, max_chars)
     winner  = results[0] if results else {"strategy": "strip_all", "text": ""}
     _log.info("[clean_html] domain=%s benchmark winner=%s score=%.3f",
@@ -266,6 +658,7 @@ def clean_html(html: str, domain: str = "", max_chars: int = 12_000) -> str:
     if domain:
         tracker.log_strategy_run(domain, results, winner["strategy"])
     return winner["text"]
+
 
 
 def benchmark_html(html: str, domain: str = "", max_chars: int = 12_000) -> list[dict]:
@@ -337,70 +730,750 @@ def detect_mode(html: str, domain: str, url: str = "") -> str:
     return "job_posting"
 
 
-_SYSTEM_PROMPT = """\
-You are an expert web scraper. Your task is to write a Python function that extracts
-job information from job-board page text.
+# ── Phase 1: Extraction-only prompt ──────────────────────────────────────────
 
-The function signature MUST be:
-    def extract(text: str) -> dict:
+_EXTRACT_SYSTEM = """\
+You are extracting structured data from a job listing page. No explanation. No code.
 
-The dict MUST have exactly these keys: title, company, description, location.
-All values must be strings. description should be the main job body (up to 4000 chars).
+Respond with EXACTLY one JSON object and nothing else:
 
-Available tools:
-- run_parser(code, text): test your extract() function against the provided text.
-- save_parser(domain, code): persist the working parser once run_parser confirms a title.
+{{"title": "<job title>", "company": "<company name>", "location": "<city/region or empty string>", "description": "<full job description, up to 4000 chars>"}}
 
-Workflow:
-1. Write an extract() function.
-2. Call run_parser to test it. If title is empty or wrong, revise and call run_parser again.
-3. As soon as run_parser returns a non-empty title, you MUST call save_parser immediately.
-
-RULES:
-- After a successful run_parser (non-empty title), your ONLY next action is to call save_parser.
-- Do NOT explain, summarise, or write any text after run_parser succeeds. Call save_parser.
-- Do NOT skip save_parser. The task is not complete until save_parser has been called.
+Rules:
+- Output ONLY the JSON object — no markdown fences, no preamble, no trailing text
+- All four keys are required; use "" for any field not found
+- Do NOT use placeholder text like "Job Title" or "Company Name"
+- description should be the actual job requirements/responsibilities text
 """
+
+# ── Phase 2: Parser-generation prompt ────────────────────────────────────────
+
+_PARSER_SYSTEM = """\
+You are a Python code generator writing a reusable job-listing parser for {domain}.
+
+The CORRECT extraction result for the SAMPLE page is:
+  title       = {title!r}
+  company     = {company!r}
+  location    = {location!r}
+
+These values are shown so you know WHAT to find, NOT so you copy them into the code.
+{format_hint}
+Your task: write a Python function that finds the values BY POSITION/STRUCTURE
+in the text — NEVER by searching for the specific strings shown above.
+
+Output ONLY a ```python code block containing:
+  import re  (and any other stdlib imports you need: html, json, string)
+  def extract(text: str) -> dict:
+      ...
+      return {{"title": title, "company": company, "location": location, "description": description}}
+
+CRITICAL RULES (violations will cause test failure):
+1. Use ONLY Python standard library (re, html, json, string) — NO pip packages
+2. Every field defaults to "" — never raise exceptions
+3. NEVER use string literals from title/company/location as search targets in your code
+   BAD:  company = next(l for l in lines if "Fisher & Paykel" in l, "")
+   GOOD: company = lines[1] if len(lines) > 1 else ""
+4. Generalise to ANY {domain} job listing in the same format, not just this page
+5. Return ONLY the ```python block — no explanation before or after
+"""
+
+# ── Phase 3: Parser fix prompt ────────────────────────────────────────────────
+
+_FIX_SYSTEM = """\
+The Python parser below is WRONG. Fix it so it extracts the correct values.
+
+Expected:
+  title    = {title!r}
+  company  = {company!r}
+  location = {location!r}
+
+Got:
+  title    = {got_title!r}
+  company  = {got_company!r}
+  location = {got_location!r}
+
+The parser runs on plain text from {domain} job listing pages.
+Output ONLY the corrected ```python code block. No explanation.
+"""
+
+_PLACEHOLDERS = frozenset({
+    "your title here", "title here", "job title", "<job title>",
+    "your company name", "company name", "<company>", "company here",
+})
+
+
+def _strip_think(raw: str) -> str:
+    """Remove <think>...</think> blocks, logging them so they're visible in companion.log."""
+    def _log_and_drop(m: re.Match) -> str:
+        block = m.group(0)
+        # Log first 2000 chars of the thinking block so it's visible in logs
+        _log.info("[think] %s…" if len(block) > 2000 else "[think] %s", block[:2000])
+        return ""
+    return re.sub(r"<think>.*?</think>", _log_and_drop, raw, flags=re.DOTALL).strip()
+
+
+def _parse_json_result(raw: str) -> dict:
+    """Try multiple strategies to extract a JSON job-info dict from LLM output."""
+    # Strategy 1: fenced ```json block
+    m = re.search(r"```json\s*(\{.*?\})\s*```", raw, re.DOTALL)
+    if m:
+        try:
+            data = json.loads(m.group(1))
+            return {k: str(data.get(k, "")) for k in _EMPTY}
+        except json.JSONDecodeError:
+            pass
+
+    # Strategy 2: bare JSON object anywhere in response
+    m = re.search(r"\{[^{}]*?\"title\"\s*:\s*\"[^\"]+?\"[^{}]*?\}", raw, re.DOTALL)
+    if m:
+        try:
+            data = json.loads(m.group(0))
+            return {k: str(data.get(k, "")) for k in _EMPTY}
+        except json.JSONDecodeError:
+            pass
+
+    # Strategy 3: any JSON object that has all four keys
+    for m in re.finditer(r"\{[^{}]{20,}\}", raw, re.DOTALL):
+        try:
+            data = json.loads(m.group(0))
+            if all(k in data for k in _EMPTY):
+                return {k: str(data.get(k, "")) for k in _EMPTY}
+        except json.JSONDecodeError:
+            continue
+
+    return dict(_EMPTY)
+
+
+def _parse_python_block(raw: str) -> str | None:
+    """Extract and normalise the Python parser code from an LLM response."""
+    m = re.search(r"```(?:python)?\s*(.*?)```", raw, re.DOTALL)
+    if not m:
+        return None
+    block = m.group(1).strip()
+    # Normalise variant function names → def extract(
+    block = re.sub(r"\bdef extract_\w+\s*\(", "def extract(", block)
+    if "def extract" not in block:
+        return None
+    return block
+
+
+# ── Phase 1 — extraction only ─────────────────────────────────────────────────
+
+def _phase1_extract(domain: str, page_text: str, ai: "AIClient") -> dict:
+    """LLM call A: extract job JSON only.  Returns _EMPTY on failure."""
+    user = f"Job listing text from {domain}:\n\n{page_text}"
+    _log.info("[phase1] extracting from %s (%d chars)", domain, len(page_text))
+    t0 = time.monotonic()
+    try:
+        raw = ai.generate(_EXTRACT_SYSTEM, user, timeout=ai.tool_timeout)
+    except Exception as exc:
+        _log.warning("[phase1] LLM call failed: %s", exc)
+        return dict(_EMPTY)
+    elapsed = time.monotonic() - t0
+    _log.info("[phase1] replied in %.1fs", elapsed)
+    raw = _strip_think(raw)
+    _log.info("[phase1] raw (first 1000):\n%s", raw[:1000])
+    result = _parse_json_result(raw)
+    if result.get("title", "").lower() in _PLACEHOLDERS:
+        _log.warning("[phase1] placeholder title %r — discarding", result["title"])
+        return dict(_EMPTY)
+    _log.info("[phase1] title=%r  company=%r  location=%r",
+              result["title"], result["company"], result["location"])
+    return result
+
+
+# ── Phase 2 — parser generation ───────────────────────────────────────────────
+
+_PINNED_FORMAT_HINT = """\
+
+IMPORTANT FORMAT for {domain}: the plain text passed to extract() always has this structure:
+  line 0: job title
+  line 1: company name
+  line 2: location (may be empty or on the same line as company)
+  ...rest: job description body (after a "Job description:" header)
+Use positional extraction (lines[0], lines[1], etc.) — it is always reliable for this domain.
+"""
+
+
+def _phase2_generate(domain: str, page_text: str, confirmed: dict,
+                     ai: "AIClient") -> str | None:
+    """LLM call B: generate Python parser knowing the confirmed values.
+
+    The confirmed extraction result is given as ground truth so the LLM knows
+    exactly what to search for in the text, enabling it to write reliable patterns.
+    """
+    format_hint = ""
+    if domain.lower() in _DOMAIN_PINNED_STRATEGY:
+        format_hint = _PINNED_FORMAT_HINT.format(domain=domain)
+
+    system = _PARSER_SYSTEM.format(
+        domain=domain,
+        title=confirmed.get("title", ""),
+        company=confirmed.get("company", ""),
+        location=confirmed.get("location", ""),
+        format_hint=format_hint,
+    )
+    user = f"Sample page text for {domain}:\n\n{page_text}"
+    _log.info("[phase2] generating parser for %s (title=%r)", domain, confirmed.get("title"))
+    t0 = time.monotonic()
+    try:
+        raw = ai.generate(system, user, timeout=ai.tool_timeout)
+    except Exception as exc:
+        _log.warning("[phase2] LLM call failed: %s", exc)
+        return None
+    elapsed = time.monotonic() - t0
+    _log.info("[phase2] replied in %.1fs", elapsed)
+    raw = _strip_think(raw)
+    _log.info("[phase2] raw (first 1500):\n%s", raw[:1500])
+    code = _parse_python_block(raw)
+    if code:
+        _log.info("[phase2] parser ✓  (%d chars)", len(code))
+    else:
+        _log.warning("[phase2] no valid def extract found in response")
+    return code
+
+
+# ── Phase 3 — validate + retry loop ──────────────────────────────────────────
+
+def _phase3_validate_and_fix(domain: str, page_text: str, confirmed: dict,
+                              parser_code: str, ai: "AIClient",
+                              max_retries: int = 3) -> tuple[str | None, dict]:
+    """Run the parser, compare to confirmed values, ask LLM to fix if wrong.
+
+    Returns (final_parser_code, final_result).
+    final_parser_code is None if validation ultimately fails.
+    """
+    from tool_server import run_parser as _run_parser
+
+    exp_title   = confirmed.get("title", "")
+    exp_company = confirmed.get("company", "")
+    exp_loc     = confirmed.get("location", "")
+
+    for attempt in range(1, max_retries + 2):  # +1 for the first validate-only pass
+        try:
+            got = _run_parser(code=parser_code, text=page_text)
+        except Exception as exc:
+            got = {"title": "", "company": "", "location": "", "description": "",
+                   "error": str(exc)}
+        got_title   = got.get("title", "")
+        got_company = got.get("company", "")
+        got_loc     = got.get("location", "")
+        _log.info("[phase3] attempt %d — title=%r  company=%r  location=%r",
+                  attempt, got_title, got_company, got_loc)
+
+        # Accept if title matches (case-insensitive substring is enough)
+        title_ok   = exp_title.lower() in got_title.lower() or got_title.lower() in exp_title.lower()
+        company_ok = (not exp_company) or (exp_company.lower() in got_company.lower()
+                                           or got_company.lower() in exp_company.lower())
+        if title_ok and company_ok:
+            _log.info("[phase3] ✓ validated after %d attempt(s)", attempt)
+            return parser_code, {k: str(got.get(k, "")) for k in _EMPTY}
+
+        if attempt > max_retries:
+            _log.warning("[phase3] exhausted %d retries — keeping last parser anyway (title wrong)",
+                         max_retries)
+            # Still return it — _try_save_parser will run its own sanity check
+            return parser_code, {k: str(got.get(k, "")) for k in _EMPTY}
+
+        # Ask LLM to fix it
+        _log.info("[phase3] parser wrong — fix attempt %d/%d", attempt, max_retries)
+        fix_system = _FIX_SYSTEM.format(
+            domain=domain,
+            title=exp_title, company=exp_company, location=exp_loc,
+            got_title=got_title, got_company=got_company, got_location=got_loc,
+        )
+        fix_user = (
+            f"Failing parser:\n```python\n{parser_code}\n```\n\n"
+            f"Page text:\n{page_text}"
+        )
+        try:
+            t0 = time.monotonic()
+            raw = ai.generate(fix_system, fix_user, timeout=ai.tool_timeout)
+            _log.info("[phase3] fix LLM replied in %.1fs", time.monotonic() - t0)
+            raw = _strip_think(raw)
+            fixed = _parse_python_block(raw)
+            if fixed:
+                parser_code = fixed
+                _log.info("[phase3] fix produced new parser (%d chars)", len(parser_code))
+            else:
+                _log.warning("[phase3] fix LLM produced no valid parser — giving up")
+                break
+        except Exception as exc:
+            _log.warning("[phase3] fix LLM call failed: %s — giving up", exc)
+            break
+
+    return None, dict(_EMPTY)
+
+
+# ── Main 3-phase pipeline ─────────────────────────────────────────────────────
+
+def _three_phase_pipeline(domain: str, page_text: str, page_html: str,
+                           ai: "AIClient") -> tuple[dict, str | None]:
+    """Quality-first parser generation:
+
+    Phase 1 — extraction only (LLM A): focused JSON extraction, no distractions.
+              Falls back to domain-specific strategy (seek/linkedin/jsonld) if LLM fails.
+    Phase 2 — parser generation (LLM B): informed by confirmed values from Phase 1.
+              Parser runs on PLAIN TEXT, so we only pass plain text here (not HTML).
+    Phase 3 — validate + fix loop (LLM C×N): runs the parser, compares to Phase 1
+              values, sends failures back to LLM for correction (up to 3 retries).
+
+    The html_skeleton is available to callers for diagnostic/future HTML-parser use
+    but is NOT included in Phase 2 since current parsers operate on plain text.
+
+    Returns (result_dict, parser_code_or_None).
+    """
+    # ── Phase 1: Extract ───────────────────────────────────────────────────────
+    result = _phase1_extract(domain, page_text, ai)
+
+    # If Phase 1 failed, try the domain strategies as a fallback source of truth
+    if not result.get("title") and page_html:
+        _log.info("[pipeline] Phase 1 failed — trying domain strategies as fallback")
+        for strat_name, strat_fn in [
+            ("seek",     _strategy_seek),
+            ("jsonld",   _strategy_jsonld),
+            ("linkedin", _strategy_linkedin),
+        ]:
+            fallback_text = strat_fn(page_html)
+            if fallback_text:
+                lines = [l for l in fallback_text.splitlines() if l.strip()]
+                if lines:
+                    result = {
+                        "title":       lines[0],
+                        "company":     lines[1] if len(lines) > 1 else "",
+                        "location":    lines[2] if len(lines) > 2 else "",
+                        "description": fallback_text.split("Job description:", 1)[-1].strip()
+                                       if "Job description:" in fallback_text else "",
+                    }
+                    _log.info("[pipeline] strategy %s gave title=%r", strat_name, result["title"])
+                    break
+
+    if not result.get("title"):
+        _log.warning("[pipeline] Phase 1 produced no title — aborting parser generation")
+        return result, None
+
+    # ── Phase 2: Generate parser (plain text only) ────────────────────────────
+    # Parsers run on clean plain text produced by clean_html(), so we only pass
+    # page_text here — NOT the HTML skeleton (which would mislead the LLM into
+    # writing an HTML parser instead of a text-pattern parser).
+    parser_code = _phase2_generate(domain, page_text, result, ai)
+    if not parser_code:
+        _log.warning("[pipeline] Phase 2 produced no parser — returning result only")
+        return result, None
+
+    # ── Phase 3: Validate + fix ────────────────────────────────────────────────
+    final_code, validated_result = _phase3_validate_and_fix(
+        domain, page_text, result, parser_code, ai, max_retries=3
+    )
+
+    # If Phase 3 confirmed the result, use the validated dict (may have description)
+    if validated_result.get("title"):
+        result = validated_result
+
+    return result, final_code
+
+
+def _programmatic_extract(domain: str, page_text: str,
+                           page_html: str) -> dict | None:
+    """Try to extract job info without any LLM call.
+
+    Checks (in order):
+    1. JSON-LD  (@type: JobPosting — industry standard, 100% reliable)
+    2. SEEK inline script JSON blob
+    3. LinkedIn title-tag strategy
+
+    Returns a result dict if a strategy succeeds (title non-empty), else None.
+    """
+    for strat_name, strat_fn in [
+        ("jsonld",   _strategy_jsonld),
+        ("seek",     _strategy_seek),
+        ("linkedin", _strategy_linkedin),
+    ]:
+        if not page_html:
+            break
+        try:
+            text = strat_fn(page_html)
+        except Exception as exc:
+            _log.debug("[prog] strategy %s raised: %s", strat_name, exc)
+            continue
+        if not text:
+            continue
+        lines = [l for l in text.splitlines() if l.strip()]
+        if not lines:
+            continue
+        title   = lines[0]
+        company = lines[1] if len(lines) > 1 else ""
+        location = (lines[2]
+                    if len(lines) > 2 and "Job description:" not in lines[2]
+                    else "")
+        description = (text.split("Job description:", 1)[-1].strip()
+                       if "Job description:" in text else "")
+        if title:
+            _log.info("[prog] strategy=%s → title=%r  company=%r", strat_name, title, company)
+            return {"title": title, "company": company,
+                    "location": location, "description": description}
+    return None
+
+
+# Positional parser template for all pinned-strategy domains.
+# _format_job_text ALWAYS produces: line0=title, line1=company, line2=location,
+# then "Job description:" header, then description body.
+# This template is injected directly — no LLM required.
+_POSITIONAL_PARSER_TEMPLATE = '''\
+# Generated: {date}  Domain: {domain}
+# Parser for {domain} — uses positional extraction on _format_job_text output.
+# Format: line 0 = title, line 1 = company, line 2 = location (optional),
+#         "Job description:" header, then description body.
+
+def extract(text: str) -> dict:
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    title    = lines[0] if len(lines) > 0 else ""
+    company  = lines[1] if len(lines) > 1 else ""
+    # line 2 is location unless it starts with "Job description:"
+    if len(lines) > 2 and not lines[2].startswith("Job description:"):
+        location = lines[2]
+    else:
+        location = ""
+    # description starts after the "Job description:" marker
+    marker = "Job description:"
+    desc_start = text.find(marker)
+    description = text[desc_start + len(marker):].strip() if desc_start >= 0 else ""
+    return {{
+        "title":       title,
+        "company":     company,
+        "location":    location,
+        "description": description,
+    }}
+'''
+
+
+def _spawn_parser_generation(domain: str, page_text: str, page_html: str,
+                              confirmed: dict, ai: "AIClient") -> _threading.Thread:
+    """Spawn a background daemon thread to generate + validate + save parser.
+
+    For pinned domains (SEEK, Indeed, LinkedIn): injects a deterministic positional
+    template instantly — no LLM call needed, 100% reliable.
+    For unknown domains: runs the full 3-phase LLM pipeline (Phase 2 + Phase 3).
+
+    The user has already received the extraction result.  This runs async so
+    the next visit to the same domain is fast (<10ms) via the saved parser.
+    Returns the thread so callers can optionally join() it (e.g. in tests).
+    """
+    def _worker() -> None:
+        _log.info("[bg-parser] starting generation for %s (title=%r)",
+                  domain, confirmed.get("title"))
+        try:
+            # ── Fast path: pinned domains get a deterministic template ────────
+            if domain.lower() in _DOMAIN_PINNED_STRATEGY:
+                import datetime as _dt
+                code = _POSITIONAL_PARSER_TEMPLATE.format(
+                    date=_dt.date.today().isoformat(),
+                    domain=domain,
+                )
+                saved = _try_save_parser(domain, code, page_text)
+                _log.info("[bg-parser] positional template saved=%s for %s", saved, domain)
+                return
+
+            # ── LLM path: unknown domains ─────────────────────────────────────
+            parser_code = _phase2_generate(domain, page_text, confirmed, ai)
+            if not parser_code:
+                _log.warning("[bg-parser] Phase 2 returned no code for %s", domain)
+                return
+            final_code, _ = _phase3_validate_and_fix(
+                domain, page_text, confirmed, parser_code, ai, max_retries=3
+            )
+            target_code = final_code or parser_code
+            saved = _try_save_parser(domain, target_code, page_text)
+            _log.info("[bg-parser] parser saved=%s for %s", saved, domain)
+        except Exception as exc:
+            _log.warning("[bg-parser] failed for %s: %s", domain, exc)
+
+    t = _threading.Thread(target=_worker, name=f"parser-gen-{domain}", daemon=True)
+    t.start()
+    _log.info("[bg-parser] background thread started for %s", domain)
+    return t
 
 
 def extract(domain: str, page_text: str, ai: "AIClient",
             page_html: str = "") -> dict:
     """Return job info dict for the given domain + page content.
 
-    If page_html is provided it is cleaned server-side (multi-strategy benchmark)
-    and used in place of page_text -- keeps the extension simple.
-    Tries cached parser first. Falls back to MCP agentic loop, then one-shot LLM.
+    Design principle: extraction (user-facing) and parser generation (background)
+    are completely decoupled.  The user never waits for parser generation.
+
+    Flow:
+      1. Cache hit         → run cached parser (<10ms)           → return
+      2. Programmatic hit  → JSON-LD / SEEK / LinkedIn strategy  → return immediately
+                             + spawn background: Phase 2 + Phase 3 parser generation
+      3. LLM extraction    → Phase 1 focused call (JSON only)    → return
+                             + spawn background: Phase 2 + Phase 3 parser generation
+      4. All fail          → return empty dict
+
+    LLM cost model:
+      - Known domains (JSON-LD / SEEK / LinkedIn): ZERO LLM calls once parser is cached
+      - Unknown domains (first visit): 1 LLM call for extraction (returns to user fast)
+      - Parser generation: 2–5 background LLM calls amortized across all future visits
     """
+    t0 = time.monotonic()
+
+    if page_html:
+        _log.debug("[extract] cleaning HTML for %s (%d chars raw)", domain, len(page_html))
+        page_text = clean_html(page_html, domain=domain)
+        _log.info("[extract] domain=%s clean_text=%d chars", domain, len(page_text))
+    else:
+        _log.info("[extract] domain=%s text_len=%d", domain, len(page_text))
+
+    # ── 1. Cache hit ──────────────────────────────────────────────────────────
+    result = _try_cached(domain, page_text)
+    if result:
+        _log.info("[extract] cache hit for %s in %.1fms", domain, (time.monotonic()-t0)*1000)
+        return result
+
+    # ── 2. Programmatic extraction (fast, zero LLM) ───────────────────────────
+    prog_result = _programmatic_extract(domain, page_text, page_html)
+    if prog_result:
+        elapsed = time.monotonic() - t0
+        _log.info("[extract] programmatic for %s in %.1fms — title=%r",
+                  domain, elapsed * 1000, prog_result.get("title"))
+        # Parser not yet cached → generate in background; next visit will be fast
+        _safe_domain = _make_safe_domain(domain)
+        parser_file  = PARSERS_DIR / f"{_safe_domain}.py"
+        if not parser_file.exists():
+            _spawn_parser_generation(domain, page_text, page_html, prog_result, ai)
+        return prog_result
+
+    # ── 3. LLM extraction (Phase 1 only — focused, JSON only) ────────────────
+    _log.info("[extract] no programmatic strategy for %s — LLM Phase 1 extraction", domain)
+    try:
+        llm_result = _phase1_extract(domain, page_text, ai)
+    except Exception as exc:
+        _log.warning("[extract] LLM extraction failed for %s: %s", domain, exc)
+        return dict(_EMPTY)
+
+    if not llm_result.get("title"):
+        _log.warning("[extract] LLM returned no title for %s", domain)
+        return dict(_EMPTY)
+
+    elapsed = time.monotonic() - t0
+    _log.info("[extract] LLM extraction for %s in %.1fs — title=%r",
+              domain, elapsed, llm_result.get("title"))
+
+    # ── 4. Spawn background parser generation ─────────────────────────────────
+    _spawn_parser_generation(domain, page_text, page_html, llm_result, ai)
+
+    return llm_result
+
+
+def extract_and_wait(domain: str, page_text: str, ai: "AIClient",
+                     page_html: str = "",
+                     parser_timeout: float = 900.0) -> dict:
+    """Like extract(), but blocks until the background parser thread finishes.
+
+    For use in tests and CLI tooling where the caller needs to verify that the
+    parser was saved before asserting.  Not for use in the FastAPI request path.
+    """
+    t0 = time.monotonic()
+
     if page_html:
         page_text = clean_html(page_html, domain=domain)
-    page_text = page_text[:12000]
 
-    # ── 1. Cache hit ─────────────────────────────────────────────────────────
+    # Cache hit — no parser generation needed
     result = _try_cached(domain, page_text)
     if result:
         return result
 
-    # ── 2. Agentic loop ───────────────────────────────────────────────────────
-    try:
-        result = _agentic_extract(domain, page_text, ai)
-        if result and result.get("title"):
-            return result
-    except Exception as exc:
-        _log.warning("[extract] agentic loop failed for %s: %s", domain, exc)
+    prog_result = _programmatic_extract(domain, page_text, page_html)
+    if prog_result:
+        _safe = _make_safe_domain(domain)
+        parser_file = PARSERS_DIR / f"{_safe}.py"
+        if not parser_file.exists():
+            thread = _spawn_parser_generation(domain, page_text, page_html, prog_result, ai)
+            _log.info("[extract_and_wait] waiting for background parser (timeout=%.0fs)", parser_timeout)
+            thread.join(timeout=parser_timeout)
+            if thread.is_alive():
+                _log.warning("[extract_and_wait] parser generation timed out after %.0fs", parser_timeout)
+        return prog_result
 
-    # ── 3. One-shot fallback (models without tool support) ────────────────────
     try:
-        result = _oneshot_extract(page_text, ai)
-        if result.get("title"):
-            # Bootstrap a reusable parser from this successful extraction so
-            # future requests for this domain skip the LLM entirely.
-            try:
-                _bootstrap_parser_from_result(domain, page_text, result, ai)
-            except Exception as exc:
-                _log.warning("[extract] bootstrap failed for %s: %s", domain, exc)
-        return result
-    except Exception:
+        llm_result = _phase1_extract(domain, page_text, ai)
+    except Exception as exc:
+        _log.warning("[extract_and_wait] LLM extraction failed: %s", exc)
         return dict(_EMPTY)
+
+    if not llm_result.get("title"):
+        return dict(_EMPTY)
+
+    thread = _spawn_parser_generation(domain, page_text, page_html, llm_result, ai)
+    _log.info("[extract_and_wait] waiting for background parser (timeout=%.0fs)", parser_timeout)
+    thread.join(timeout=parser_timeout)
+    if thread.is_alive():
+        _log.warning("[extract_and_wait] parser generation timed out after %.0fs", parser_timeout)
+
+    _log.info("[extract_and_wait] total=%.1fs  title=%r", time.monotonic() - t0,
+              llm_result.get("title"))
+    return llm_result
+
+
+def _make_safe_domain(domain: str) -> str:
+    """Return a filename-safe version of a domain string."""
+    import re as _re
+    return _re.sub(r"[^\w.\-]", "_", domain.replace("www.", ""))
+
+
+
+
+
+
+def _try_save_parser(domain: str, code: str, page_text: str) -> bool:
+    """Safety-check, validate, and save an LLM-generated parser.
+
+    Pipeline:
+      1. AST safety scan  — block dangerous imports, builtins, and syscalls
+      2. Functional test  — run code against the sample page_text
+      3. Title sanity     — verify output looks like a real job title
+      4. Save             — persist to PARSERS_DIR only if all checks pass
+    """
+    from tool_server import run_parser as _run_parser, save_parser as _save_parser
+
+    # ── 1. Safety scan ───────────────────────────────────────────────────────
+    _log.info("[save_parser] generated parser code for %s:\n%s", domain, code)
+    safe, reason = _safety_check(code)
+    if not safe:
+        _log.error("[save_parser] SAFETY REJECTION for %s — %s\n--- rejected code ---\n%s\n---",
+                   domain, reason, code)
+        return False
+
+    # ── 2. Functional test ───────────────────────────────────────────────────
+    try:
+        test = _run_parser(code=code, text=page_text)
+    except Exception as exc:
+        _log.warning("[save_parser] runtime error for %s: %s — NOT saving", domain, exc)
+        return False
+
+    title = test.get("title", "")
+    _log.info("[save_parser] validation run: title=%r company=%r location=%r error=%r",
+              title, test.get("company", ""), test.get("location", ""), test.get("error", ""))
+
+    # ── 3. Title sanity ──────────────────────────────────────────────────────
+    if not _looks_valid_title(title, domain):
+        _log.warning("[save_parser] validation failed for %s — title=%r — NOT saving", domain, title)
+        return False
+
+    # ── 4. Save ──────────────────────────────────────────────────────────────
+    res = _save_parser(domain=domain, code=code)
+    _log.info("[save_parser] saved parser for %s ✓ — %s", domain, res)
+    return True
+
+
+# ── LLM-generated code safety checker ────────────────────────────────────────
+
+# Modules the parser must never import
+_BLOCKED_IMPORTS = frozenset({
+    "os", "sys", "subprocess", "shutil", "pathlib", "glob",
+    "socket", "urllib", "http", "requests", "httpx", "aiohttp",
+    "pickle", "marshal", "shelve", "dbm",
+    "ctypes", "cffi", "importlib", "runpy", "pkgutil",
+    "tempfile", "threading", "multiprocessing", "concurrent",
+    "signal", "resource", "mmap", "fcntl", "termios",
+    "builtins", "inspect", "gc", "weakref", "traceback",
+    "ast", "dis", "code", "codeop", "tokenize",
+    "pty", "tty", "nis", "pwd", "grp",
+})
+
+# Builtin names the parser must never call
+_BLOCKED_BUILTINS = frozenset({
+    "eval", "exec", "compile", "__import__", "open",
+    "breakpoint", "memoryview", "vars", "locals", "globals",
+    "exit", "quit",
+})
+
+# Object methods that suggest file/process/network access
+_BLOCKED_METHODS = frozenset({
+    "system", "popen", "run", "call", "Popen", "check_output", "check_call",
+    "remove", "unlink", "rmdir", "rmtree", "chmod", "chown", "rename", "replace",
+    "write", "writelines", "truncate", "seek",
+    "connect", "bind", "send", "sendall", "recv",
+})
+
+# Regex patterns that hint at obfuscation / shell injection even without AST
+_SUSPICIOUS_PATTERNS = [
+    (re.compile(r"\beval\s*\("),               "eval()"),
+    (re.compile(r"\bexec\s*\("),               "exec()"),
+    (re.compile(r"\bos\s*\.\s*system\s*\("),   "os.system()"),
+    (re.compile(r"\bsubprocess\b"),             "subprocess"),
+    (re.compile(r"__import__\s*\("),            "__import__()"),
+    (re.compile(r"\bopen\s*\("),               "open()"),
+    (re.compile(r"\bchr\s*\(\s*\d"),           "chr() literal (possible obfuscation)"),
+    (re.compile(r"\\x[0-9a-fA-F]{2}.*\\x"),   "hex-escape sequence (possible obfuscation)"),
+    (re.compile(r"base64"),                     "base64 (possible obfuscation)"),
+    (re.compile(r"rm\s+-"),                     "shell rm command"),
+    (re.compile(r":\s*/dev/"),                  "/dev/ path"),
+]
+
+
+def _safety_check(code: str) -> tuple[bool, str]:
+    """AST + regex static safety analysis for LLM-generated parser code.
+
+    Returns (is_safe, rejection_reason).
+    Checks are layered: fast regex first, then full AST walk.
+    """
+    # ── Fast regex pass ───────────────────────────────────────────────────────
+    for pattern, label in _SUSPICIOUS_PATTERNS:
+        if pattern.search(code):
+            return False, f"suspicious pattern detected: {label}"
+
+    # ── AST parse ─────────────────────────────────────────────────────────────
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as exc:
+        return False, f"syntax error: {exc}"
+
+    # ── AST walk ──────────────────────────────────────────────────────────────
+    for node in ast.walk(tree):
+
+        # Block any import of a dangerous module
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".")[0]
+                if root in _BLOCKED_IMPORTS:
+                    return False, f"blocked import: {alias.name}"
+
+        if isinstance(node, ast.ImportFrom):
+            root = (node.module or "").split(".")[0]
+            if root in _BLOCKED_IMPORTS:
+                return False, f"blocked import from: {node.module}"
+
+        # Block dangerous builtin calls: eval(), exec(), open(), __import__()
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                if node.func.id in _BLOCKED_BUILTINS:
+                    return False, f"blocked builtin call: {node.func.id}()"
+
+            # Block dangerous method calls: .system(), .write(), .unlink() etc.
+            if isinstance(node.func, ast.Attribute):
+                if node.func.attr in _BLOCKED_METHODS:
+                    return False, f"blocked method call: .{node.func.attr}()"
+
+        # Block dunder attribute access — potential sandbox escape
+        if isinstance(node, ast.Attribute):
+            attr = node.attr
+            if attr.startswith("__") and attr.endswith("__") and attr not in (
+                "__name__", "__doc__", "__class__",
+            ):
+                return False, f"blocked dunder attribute: {attr}"
+
+    _log.info("[safety] parser code for passed all checks (%d chars, %d AST nodes)",
+              len(code), sum(1 for _ in ast.walk(tree)))
+    return True, ""
+
+
+
+
+def create_parser_background(domain: str, page_text: str, ai: "AIClient",
+                              known_result: dict | None = None) -> None:
+    """Kept for API compatibility — no longer used; combined extract handles this inline."""
+    _log.info("[parser-bg] create_parser_background called for %s — now handled inline by extract()", domain)
+
 
 
 def _looks_valid_title(title: str, domain: str) -> bool:
@@ -456,139 +1529,6 @@ def _try_cached(domain: str, page_text: str) -> dict | None:
         return None
 
 
-def _agentic_extract(domain: str, page_text: str, ai: "AIClient") -> dict | None:
-    """Run the tool-use agentic loop. Returns result if a parser was saved.
-
-    Auto-save strategy: if the LLM calls run_parser and gets a valid title but
-    then forgets to call save_parser (common with instruction-following models),
-    we capture the last successfully-tested code and save it ourselves.
-    """
-    from tool_server import save_parser as _save_parser
-    log = _log
-
-    # Track the last code that run_parser validated successfully.
-    _last_good_code: list[str] = []
-
-    original_run_parser = TOOL_FUNCTIONS["run_parser"]
-
-    def _tracked_run_parser(code: str, text: str) -> dict:
-        result = original_run_parser(code=code, text=text)
-        title = result.get("title", "")
-        # Accept only clean titles: non-empty, short, no newlines
-        if title and len(title) <= 150 and "\n" not in title:
-            _last_good_code.clear()
-            _last_good_code.append(code)
-            log.info("[extract] run_parser validated — title=%r", title)
-        elif title:
-            log.info("[extract] run_parser title looks wrong (len=%d, newlines=%s) — skipping",
-                     len(title), "\n" in title)
-        return result
-
-    custom_fns = {**TOOL_FUNCTIONS, "run_parser": _tracked_run_parser}
-
-    user_prompt = (
-        f"Domain: {domain}\n\n"
-        f"Page text (first 12000 chars):\n{page_text}"
-    )
-    try:
-        loop_result = ai.generate_with_tools(
-            system_prompt=_SYSTEM_PROMPT,
-            user_prompt=user_prompt,
-            tools=TOOLS,
-            tool_functions=custom_fns,
-            max_iters=10,
-        )
-    except Exception as exc:
-        log.warning("[extract] agentic loop raised: %s", exc)
-        loop_result = {"saved": False, "iterations": 0, "result": None}
-
-    log.info("[extract] agentic loop done: saved=%s iterations=%s",
-             loop_result.get("saved"), loop_result.get("iterations"))
-
-    # Happy path: LLM called save_parser itself.
-    if loop_result.get("saved"):
-        return _try_cached(domain, page_text)
-
-    # Recovery: LLM validated code but forgot to call save_parser — do it ourselves.
-    if _last_good_code:
-        save_result = _save_parser(domain=domain, code=_last_good_code[-1])
-        log.info("[extract] auto-saved parser for %s: %s", domain, save_result)
-        return _try_cached(domain, page_text)
-
-    return None
 
 
-def _oneshot_extract(page_text: str, ai: "AIClient") -> dict:
-    """One-shot extraction without tools — returns JSON from LLM."""
-    system = (
-        "You are a job listing parser. Extract job info from the given page text. "
-        "Reply with ONLY a JSON object with keys: title, company, description, location. "
-        "No markdown, no explanation."
-    )
-    user = f"Extract job info from this page text:\n\n{page_text}"
-    raw = ai.generate(system, user)
-    # Strip markdown fences if model wraps with ```json
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-    try:
-        data = json.loads(raw)
-        return {k: str(data.get(k, "")) for k in _EMPTY}
-    except json.JSONDecodeError:
-        return dict(_EMPTY)
-
-
-def _bootstrap_parser_from_result(domain: str, page_text: str,
-                                   known: dict, ai: "AIClient") -> None:
-    """After a successful one-shot extraction, ask the LLM to write a reusable
-    parser for this domain using the known-good result as the ground truth.
-
-    This is the fallback path for models that cannot do tool-use, so we keep
-    the prompt dead simple and validate before saving.
-    """
-    from tool_server import save_parser as _save_parser, _safe_domain
-
-    title   = known.get("title", "")
-    company = known.get("company", "")
-    if not title or not _looks_valid_title(title, domain):
-        return  # not worth saving a parser for bad data
-
-    system = (
-        "You are a Python code generator. Write a function called `extract(page_text: str) -> dict` "
-        "that parses job listing pages from the domain and returns a dict with keys: "
-        "title, company, description, location.\n\n"
-        "Rules:\n"
-        "- Use only the Python standard library (re, html, json — no third-party packages).\n"
-        "- Look for the specific patterns visible in the sample page text.\n"
-        "- Return empty strings for any field not found.\n"
-        "- Output ONLY the Python function, no imports outside the function, no explanation.\n"
-        "- Start your response with `def extract(page_text: str) -> dict:`\n\n"
-        f"Domain: {domain}\n"
-        f"Known-good result for validation:\n"
-        f"  title   = {title!r}\n"
-        f"  company = {company!r}\n"
-    )
-    user = f"Sample page text:\n\n{page_text[:8000]}"
-
-    try:
-        code = ai.generate(system, user).strip()
-        if code.startswith("```"):
-            code = code.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-        if "def extract(" not in code:
-            _log.warning("[bootstrap] LLM did not produce a valid extract() function for %s", domain)
-            return
-
-        # Validate: run the generated parser against the same page_text
-        from tool_server import run_parser as _run_parser
-        result = _run_parser(code=code, text=page_text)
-        parsed_title = result.get("title", "")
-        if not _looks_valid_title(parsed_title, domain):
-            _log.warning("[bootstrap] generated parser returned bad title %r for %s — not saving",
-                         parsed_title, domain)
-            return
-
-        save_result = _save_parser(domain=domain, code=code)
-        _log.info("[bootstrap] saved parser for %s via one-shot bootstrap: %s", domain, save_result)
-    except Exception as exc:
-        _log.warning("[bootstrap] parser bootstrap failed for %s: %s", domain, exc)
 

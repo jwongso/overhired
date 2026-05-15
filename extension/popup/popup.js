@@ -374,6 +374,8 @@ function GenerateTab({ settings, health }) {
       }
 
       setScanState('learning');
+      // Clear previous job data immediately so stale results don't show
+      setTitle(''); setCompany(''); setDesc(''); setJobDomain(''); setResult(null);
       const extractFetch = await fetch(`${companionUrl(settings)}/extract`, {
         method:  'POST',
         headers: companionHeaders(settings),

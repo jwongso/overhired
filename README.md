@@ -4,7 +4,7 @@
 
 **grapply** is a browser extension + local companion service that reads any job posting, generates a personalized cover letter using your local LLM or online AI provider (Anthropic or OpenAI), and produces a full analysis package — cover letter, job fit score, company summary, and jargon decoder — saved to disk automatically.
 
-<img src="extension.png" width="280" alt="grapply extension screenshot">
+<img src="extension.png" width="320" alt="grapply extension screenshot">
 
 ---
 

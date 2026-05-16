@@ -68,7 +68,11 @@ def ai_client():
 
 
 def _load_html(domain: str) -> str:
-    """Attempt live fetch (SEEK only); fall back to saved file."""
+    """Try live fetch first (SEEK only); fall back to saved file; skip if neither available.
+
+    Saved files are not committed (copyrighted). To run tests that require them,
+    save the page manually from your browser into tests/real_page/.
+    """
     cfg        = DOMAINS[domain]
     saved_path = REAL_PAGE_DIR / cfg["saved_file"]
 
@@ -89,12 +93,17 @@ def _load_html(domain: str) -> str:
             print(f"\n[test] fetched live page for {domain}: {len(html):,} chars")
             return html
         except Exception as exc:
-            print(f"\n[test] live fetch failed ({exc}), using saved file")
+            print(f"\n[test] live fetch failed ({exc})")
 
-    assert saved_path.exists(), f"Saved page not found: {saved_path}"
-    html = saved_path.read_text(encoding="utf-8", errors="replace")
-    print(f"\n[test] using saved page for {domain}: {len(html):,} chars")
-    return html
+    if saved_path.exists():
+        html = saved_path.read_text(encoding="utf-8", errors="replace")
+        print(f"\n[test] using saved page for {domain}: {len(html):,} chars")
+        return html
+
+    pytest.skip(
+        f"No HTML source for {domain}. "
+        f"Save the job page from your browser to: {saved_path}"
+    )
 
 
 def _run_domain_test(domain: str, ai_client) -> None:

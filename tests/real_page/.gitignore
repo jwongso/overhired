@@ -1,3 +1,6 @@
-# Browser-saved page auxiliary folders and Windows metadata
+# Saved browser pages are copyrighted - never commit them.
+# To run integration tests, save pages manually from your browser into this folder.
+*.html
+*.htm
 *_files/
 *.html:Zone.Identifier

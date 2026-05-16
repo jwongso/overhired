@@ -35,7 +35,7 @@ _SAVED_HTML = (
 
 
 def _fetch_html() -> str:
-    """Fetch live page, fall back to saved file."""
+    """Fetch live page; fall back to saved file if present; skip if neither works."""
     try:
         req = urllib.request.Request(
             SEEK_URL,
@@ -52,9 +52,14 @@ def _fetch_html() -> str:
         print(f"\n[test] fetched live page: {len(html):,} chars")
         return html
     except Exception as exc:
-        print(f"\n[test] live fetch failed ({exc}), using saved file")
-        assert _SAVED_HTML.exists(), f"No saved fallback at {_SAVED_HTML}"
-        return _SAVED_HTML.read_text(encoding="utf-8", errors="replace")
+        print(f"\n[test] live fetch failed ({exc})")
+        if _SAVED_HTML.exists():
+            print(f"[test] using saved fallback: {_SAVED_HTML.name}")
+            return _SAVED_HTML.read_text(encoding="utf-8", errors="replace")
+        pytest.skip(
+            f"Live fetch failed and no saved fallback at {_SAVED_HTML}. "
+            "Save the page manually from your browser to run this test."
+        )
 
 
 @pytest.fixture(scope="module")

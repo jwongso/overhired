@@ -81,8 +81,17 @@ PAGES = {
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _load(filename: str) -> str:
+    """Load a saved HTML file; skip the test if not present.
+
+    Saved pages are not committed (copyrighted). To run these tests,
+    save the page manually from your browser into tests/real_page/.
+    """
     path = REAL_PAGE_DIR / filename
-    assert path.exists(), f"Saved page not found: {path}"
+    if not path.exists():
+        pytest.skip(
+            f"Saved page not found: {path}. "
+            "Save the page from your browser to run this test."
+        )
     return path.read_text(encoding="utf-8", errors="replace")
 
 

@@ -170,6 +170,65 @@ function scrapeJobFromPage() {
   info.url       = window.location.href;
   info.page_html = document.documentElement.outerHTML.slice(0, 500_000);
   info.page_text = (document.body?.innerText || '').slice(0, 12000);
+
+  // Structured extraction — works even when the body is a loading skeleton.
+  // These fields are sent as pre_* to the companion so it can skip HTML cleaning
+  // entirely when they contain enough data (common for React SPAs with JSON-LD).
+
+  // 1. JSON-LD JobPosting
+  for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
+    try {
+      const data  = JSON.parse(s.textContent);
+      const items = Array.isArray(data['@graph']) ? data['@graph'] : [data];
+      for (const item of items) {
+        if (item['@type'] !== 'JobPosting') continue;
+        info.title       = info.title       || item.title || '';
+        info.company     = info.company     || (item.hiringOrganization && item.hiringOrganization.name) || '';
+        info.location    = info.location    || (item.jobLocation && item.jobLocation.address && item.jobLocation.address.addressLocality) || '';
+        if (!info.description && item.description) {
+          const div = document.createElement('div');
+          div.innerHTML = item.description;
+          info.description = (div.textContent || '').trim().slice(0, 6000);
+        }
+      }
+    } catch (e) { /* skip malformed */ }
+    if (info.title && info.description) break;
+  }
+
+  // 2. OpenGraph / meta tags
+  const _meta = name => {
+    const el = document.querySelector('meta[property="' + name + '"], meta[name="' + name + '"]');
+    return (el && el.content && el.content.trim()) || '';
+  };
+  if (!info.title)   info.title   = _meta('og:title') || _meta('twitter:title');
+  if (!info.company) info.company = _meta('og:site_name');
+
+  // 3. Page title heuristic: "Role @ Company" or "Role | Company"
+  if (!info.title || !info.company) {
+    const sep = document.title.match(/(.+?)\s*[@|–—-]\s*(.+)/);
+    if (sep) {
+      if (!info.title)   info.title   = sep[1].trim();
+      if (!info.company) info.company = sep[2].replace(/\s*jobs?$/i, '').trim();
+    } else if (!info.title) {
+      info.title = document.title.trim();
+    }
+  }
+
+  // 4. Heuristic body block for description (selectors ordered by specificity)
+  if (!info.description) {
+    const selectors = [
+      '[class*="job-description"]', '[class*="jobDescription"]',
+      '[id*="job-description"]',    '[class*="posting-body"]',
+      '[class*="job-detail"]',      'article', 'main',
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (!el) continue;
+      const text = el.innerText && el.innerText.trim();
+      if (text && text.length > 200) { info.description = text.slice(0, 6000); break; }
+    }
+  }
+
   return info;
 }
 
@@ -379,7 +438,8 @@ function GenerateTab({ settings, health }) {
       const extractFetch = await fetch(`${companionUrl(settings)}/extract`, {
         method:  'POST',
         headers: companionHeaders(settings),
-        body:    JSON.stringify({ domain, page_text: j?.page_text || '', page_html: j?.page_html || '', url: j?.url || tab.url || '' }),
+        body:    JSON.stringify({ domain, page_text: j?.page_text || '', page_html: j?.page_html || '', url: j?.url || tab.url || '',
+                                 pre_title: j?.title || '', pre_company: j?.company || '', pre_location: j?.location || '', pre_description: j?.description || '' }),
       });
       if (!extractFetch.ok) {
         const detail = await extractFetch.json().catch(() => ({}));

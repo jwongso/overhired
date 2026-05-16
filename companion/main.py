@@ -503,6 +503,12 @@ class ExtractRequest(BaseModel):
     page_text: str = Field(default="", description="document.body.innerText fallback")
     page_html: str = Field(default="", description="Full outerHTML -- companion cleans it")
     url:       str = Field(default="", description="Full page URL for ATS path detection")
+    # Pre-extracted fields from client-side DOM parsing (JSON-LD, meta, title heuristic).
+    # Used as a fast path when HTML cleaning fails (React SPAs, lazy-loaded content).
+    pre_title:       str = Field(default="")
+    pre_company:     str = Field(default="")
+    pre_location:    str = Field(default="")
+    pre_description: str = Field(default="")
 
 
 class ScanRequest(BaseModel):
@@ -558,7 +564,13 @@ def extract_job(req: ExtractRequest, _: None = Depends(_require_token)):
     logger.info("[extract] domain=%s html=%d chars text=%d chars",
                 req.domain, len(req.page_html), len(req.page_text))
     mode   = extractor.detect_mode(req.page_html, req.domain, req.url)
-    result = extractor.extract(req.domain, req.page_text, AI, page_html=req.page_html)
+    pre    = {
+        "title":       req.pre_title,
+        "company":     req.pre_company,
+        "location":    req.pre_location,
+        "description": req.pre_description,
+    }
+    result = extractor.extract(req.domain, req.page_text, AI, page_html=req.page_html, pre_extracted=pre)
     result["mode"] = mode
     logger.info("[extract] result: title=%r company=%r parser_cached=%s",
                 result.get("title", ""), result.get("company", ""),

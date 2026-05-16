@@ -40,14 +40,24 @@ _log = logging.getLogger(__name__)
 _DROP_TAGS      = frozenset({
     # JS / CSS
     "script", "style",
-    # Document metadata
-    "head", "link", "meta", "noscript",
+    # Document metadata (head itself is dropped; meta/link are void - see _VOID_TAGS)
+    "head", "noscript",
     # Embeds / media that add no text
-    "svg", "canvas", "video", "audio", "picture", "source", "track",
+    "svg", "canvas", "video", "audio", "picture",
     # Invisible / template markup
     "iframe", "template", "object", "embed",
 })
 _DROP_SECTIONAL = frozenset({"nav", "footer", "aside"})
+
+# Void elements never have a closing tag. If they appear in _DROP_TAGS they would
+# increment _skip without ever decrementing it, causing the entire rest of the
+# document to be silently dropped. Keep them out of _DROP_TAGS and handle them
+# here: skip their content by simply ignoring them in handle_starttag (they have
+# no text content anyway).
+_VOID_TAGS = frozenset({
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+})
 
 # Job-signal words — presence in extracted text indicates quality
 _JOB_SIGNALS = re.compile(
@@ -90,6 +100,8 @@ class _StripParser(HTMLParser):
 
     def handle_starttag(self, tag: str, _attrs: list) -> None:
         t = tag.lower()
+        if t in _VOID_TAGS:
+            return  # void elements have no closing tag - must not touch _skip
         if t in self._drop:
             self._skip += 1
         elif t in _BLOCK_TAGS and not self._skip:
@@ -682,9 +694,28 @@ _ATS_DOMAINS = frozenset({
     "successfactors.com", "bamboohr.com", "recruitee.com",
 })
 
+# Known job listing boards - these always show job postings; only switch to ATS
+# if the URL explicitly contains an apply path segment.
+_JOB_BOARD_DOMAINS = frozenset({
+    "amazon.jobs", "linkedin.com", "indeed.com", "seek.com",
+    "nz.seek.com", "au.seek.com", "glassdoor.com", "glassdoor.co.nz",
+    "seek.co.nz", "jobs.apple.com", "careers.google.com",
+    "microsoft.com", "careers.microsoft.com",
+})
+
 # URL path segments that indicate an application page
 _ATS_PATH_RE = re.compile(
     r"/(apply|application|jobs/apply|submit|careers/apply)", re.IGNORECASE
+)
+
+# File inputs that accept resume/document types (strong application signal)
+_RESUME_ACCEPT_RE = re.compile(
+    r'type=["\']file["\'][^>]*accept=["\'][^"\']*\.(pdf|doc|docx|rtf)',
+    re.IGNORECASE,
+)
+_RESUME_ACCEPT_RE2 = re.compile(
+    r'accept=["\'][^"\']*\.(pdf|doc|docx|rtf)[^"\']*["\'][^>]*type=["\']file["\']',
+    re.IGNORECASE,
 )
 
 
@@ -692,11 +723,12 @@ def detect_mode(html: str, domain: str, url: str = "") -> str:
     """Return 'ats_form' or 'job_posting' by analysing page HTML + domain.
 
     Signals checked (in priority order):
-    1. Domain is a known ATS platform          -> ats_form
-    2. URL path contains /apply or /application -> ats_form
-    3. HTML has resume upload + email field     -> ats_form  (strong application signal)
-    4. HTML has 2+ labeled form fields          -> ats_form
-    5. Otherwise                               -> job_posting
+    1. Domain is a known ATS platform              -> ats_form
+    2. URL path contains /apply or /application    -> ats_form
+    3. Known job board domain without apply URL    -> job_posting (skip heuristics)
+    4. HTML has resume upload + email field        -> ats_form  (strong application signal)
+    5. HTML has 6+ labeled form fields             -> ats_form
+    6. Otherwise                                   -> job_posting
     """
     domain_lower = domain.lower()
     if any(ats in domain_lower for ats in _ATS_DOMAINS):
@@ -707,11 +739,18 @@ def detect_mode(html: str, domain: str, url: str = "") -> str:
         _log.info("[detect_mode] domain=%s -> ats_form (ATS URL path)", domain)
         return "ats_form"
 
-    # Resume upload is a near-certain application form signal
-    has_file_input = bool(re.search(r'type=["\']file["\']', html, re.IGNORECASE))
-    has_email      = bool(re.search(r'type=["\']email["\']', html, re.IGNORECASE))
-    if has_file_input and has_email:
-        _log.info("[detect_mode] domain=%s -> ats_form (file+email inputs)", domain)
+    # Known job boards: listing pages have search/alert forms - skip HTML heuristics
+    if any(board in domain_lower for board in _JOB_BOARD_DOMAINS):
+        _log.info("[detect_mode] domain=%s -> job_posting (known job board)", domain)
+        return "job_posting"
+
+    # Resume-specific file upload + email = application form (not just any file input)
+    has_resume_upload = bool(
+        _RESUME_ACCEPT_RE.search(html) or _RESUME_ACCEPT_RE2.search(html)
+    )
+    has_email = bool(re.search(r'type=["\']email["\']', html, re.IGNORECASE))
+    if has_resume_upload and has_email:
+        _log.info("[detect_mode] domain=%s -> ats_form (resume+email inputs)", domain)
         return "ats_form"
 
     # Count labeled/named text-like inputs (ignore search/hidden/checkbox/radio)
@@ -722,7 +761,7 @@ def detect_mode(html: str, domain: str, url: str = "") -> str:
     # Also count textareas (cover letter / additional info)
     textareas = re.findall(r'<textarea', html, re.IGNORECASE)
     application_fields = len(form_inputs) + len(textareas)
-    if application_fields >= 4:
+    if application_fields >= 6:
         _log.info("[detect_mode] domain=%s -> ats_form (%d form fields)", domain, application_fields)
         return "ats_form"
 
@@ -1195,19 +1234,21 @@ def _spawn_parser_generation(domain: str, page_text: str, page_html: str,
 
 
 def extract(domain: str, page_text: str, ai: "AIClient",
-            page_html: str = "") -> dict:
+            page_html: str = "",
+            pre_extracted: dict | None = None) -> dict:
     """Return job info dict for the given domain + page content.
 
     Design principle: extraction (user-facing) and parser generation (background)
     are completely decoupled.  The user never waits for parser generation.
 
     Flow:
-      1. Cache hit         → run cached parser (<10ms)           → return
-      2. Programmatic hit  → JSON-LD / SEEK / LinkedIn strategy  → return immediately
-                             + spawn background: Phase 2 + Phase 3 parser generation
-      3. LLM extraction    → Phase 1 focused call (JSON only)    → return
-                             + spawn background: Phase 2 + Phase 3 parser generation
-      4. All fail          → return empty dict
+      0. Pre-extracted hit  → client sent JSON-LD / meta data with title + desc → return
+      1. Cache hit          → run cached parser (<10ms)                          → return
+      2. Programmatic hit   → JSON-LD / SEEK / LinkedIn strategy                 → return
+                              + spawn background: Phase 2 + Phase 3 parser generation
+      3. LLM extraction     → Phase 1 focused call (JSON only)                  → return
+                              + spawn background: Phase 2 + Phase 3 parser generation
+      4. All fail           → return empty dict
 
     LLM cost model:
       - Known domains (JSON-LD / SEEK / LinkedIn): ZERO LLM calls once parser is cached
@@ -1216,10 +1257,31 @@ def extract(domain: str, page_text: str, ai: "AIClient",
     """
     t0 = time.monotonic()
 
+    # ── 0. Pre-extracted data (JSON-LD / meta from client DOM) ───────────────
+    # The extension parses JSON-LD and meta tags in the live browser, which works
+    # even for React SPAs where the server-sent HTML contains no job content.
+    # If the client found a title + description, trust it and skip HTML cleaning.
+    pre = pre_extracted or {}
+    if pre.get("title") and pre.get("description"):
+        _log.info("[extract] domain=%s using pre-extracted data (JSON-LD/meta) — title=%r",
+                  domain, pre["title"])
+        return {
+            "title":       pre["title"],
+            "company":     pre.get("company", ""),
+            "location":    pre.get("location", ""),
+            "description": pre["description"],
+        }
+
     if page_html:
         _log.debug("[extract] cleaning HTML for %s (%d chars raw)", domain, len(page_html))
-        page_text = clean_html(page_html, domain=domain)
-        _log.info("[extract] domain=%s clean_text=%d chars", domain, len(page_text))
+        cleaned = clean_html(page_html, domain=domain)
+        _log.info("[extract] domain=%s clean_text=%d chars", domain, len(cleaned))
+        if cleaned:
+            page_text = cleaned
+        elif page_text:
+            _log.info("[extract] domain=%s HTML cleaning empty — using page_text fallback (%d chars)",
+                      domain, len(page_text))
+        # else: both empty — will try pre-extracted partial data or LLM
     else:
         _log.info("[extract] domain=%s text_len=%d", domain, len(page_text))
 
@@ -1243,14 +1305,36 @@ def extract(domain: str, page_text: str, ai: "AIClient",
         return prog_result
 
     # ── 3. LLM extraction (Phase 1 only — focused, JSON only) ────────────────
+    # Supplement page_text with pre-extracted partial data if page_text is thin.
+    llm_text = page_text
+    if pre.get("title") and len(page_text) < 500:
+        pre_summary = (
+            f"Title: {pre['title']}\n"
+            f"Company: {pre.get('company', '')}\n"
+            f"Location: {pre.get('location', '')}\n"
+            f"{page_text}"
+        ).strip()
+        llm_text = pre_summary
+        _log.info("[extract] domain=%s supplementing thin page_text with pre-extracted fields", domain)
+
     _log.info("[extract] no programmatic strategy for %s — LLM Phase 1 extraction", domain)
     try:
-        llm_result = _phase1_extract(domain, page_text, ai)
+        llm_result = _phase1_extract(domain, llm_text, ai)
     except Exception as exc:
         _log.warning("[extract] LLM extraction failed for %s: %s", domain, exc)
         return dict(_EMPTY)
 
     if not llm_result.get("title"):
+        # Last resort: return whatever the client pre-extracted (title at minimum)
+        if pre.get("title"):
+            _log.info("[extract] domain=%s LLM empty — returning pre-extracted partial: title=%r",
+                      domain, pre["title"])
+            return {
+                "title":       pre["title"],
+                "company":     pre.get("company", ""),
+                "location":    pre.get("location", ""),
+                "description": pre.get("description", ""),
+            }
         _log.warning("[extract] LLM returned no title for %s", domain)
         return dict(_EMPTY)
 

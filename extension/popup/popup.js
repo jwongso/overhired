@@ -12,7 +12,6 @@ const html = htm.bind(h);
 marked.use({
   renderer: {
     html: () => '',
-    html_block: () => '',
   },
 });
 

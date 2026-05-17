@@ -316,6 +316,30 @@ function FileStatusBar({ status }) {
     </div>`;
 }
 
+// -- Cover letter preview with copy button ------------------------------------
+
+function CoverLetterPreview({ md }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(md);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {}
+  }
+
+  return html`
+    <div style="position:relative;margin-top:12px">
+      <button class="copy-btn ${copied ? 'copy-btn-ok' : ''}" onClick=${copy} title="Copy cover letter">
+        ${copied
+          ? html`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>`
+          : html`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`}
+      </button>
+      <div class="preview" dangerouslySetInnerHTML=${{__html: marked.parse(md)}} />
+    </div>`;
+}
+
 // -- Generate tab --------------------------------------------------------------
 
 function GenerateTab({ settings, health }) {
@@ -701,9 +725,7 @@ function GenerateTab({ settings, health }) {
       ${FileStatusBar({ status: fileStatus })}
 
       ${!atsMode && result && html`
-        <div class="preview" dangerouslySetInnerHTML=${{
-          __html: marked.parse(result.cover_letter_md || '')
-        }} />`}
+        <${CoverLetterPreview} md=${result.cover_letter_md || ''} />`}
     </div>`;
 }
 

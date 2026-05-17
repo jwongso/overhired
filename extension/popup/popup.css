@@ -170,8 +170,23 @@ textarea { resize: vertical; min-height: 72px; }
   overflow-y: auto;
   font-size: 12px;
   line-height: 1.6;
-  margin-top: 12px;
 }
+.copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 4px 5px;
+  line-height: 0;
+  transition: color .15s, border-color .15s;
+}
+.copy-btn:hover { color: var(--text); border-color: var(--text); }
+.copy-btn-ok    { color: var(--ok);  border-color: var(--ok); }
 .preview h1, .preview h2, .preview h3 { font-size: 13px; margin-bottom: 6px; }
 .preview p   { margin-bottom: 8px; }
 

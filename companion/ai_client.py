@@ -3,6 +3,7 @@ grapply — unified AI client
 
 Supports:
   - ollama     : OpenAI-compatible endpoint (default: localhost:11434)
+  - llamacpp   : llama.cpp server OpenAI-compatible endpoint
   - openai     : api.openai.com /v1/chat/completions
   - claude     : api.anthropic.com /v1/messages  (different schema)
 
@@ -34,10 +35,11 @@ def _log_usage(provider: str, model: str, endpoint: str, usage: dict) -> None:
     except Exception:
         pass
 
-OLLAMA_DEFAULT_ENDPOINT = "http://localhost:11434"
-OPENAI_DEFAULT_ENDPOINT = "https://api.openai.com"
-CLAUDE_DEFAULT_ENDPOINT = "https://api.anthropic.com"
-CLAUDE_API_VERSION      = "2023-06-01"
+OLLAMA_DEFAULT_ENDPOINT  = "http://localhost:11434"
+LLAMACPP_DEFAULT_ENDPOINT = "http://localhost:8080"
+OPENAI_DEFAULT_ENDPOINT  = "https://api.openai.com"
+CLAUDE_DEFAULT_ENDPOINT  = "https://api.anthropic.com"
+CLAUDE_API_VERSION       = "2023-06-01"
 
 
 class AIError(Exception):
@@ -69,12 +71,14 @@ class AIClient:
         # the configured endpoint is the Ollama default but the provider isn't ollama
         # (catches the common case of changing provider without clearing endpoint).
         if not raw_endpoint or (
-            raw_endpoint == OLLAMA_DEFAULT_ENDPOINT and self.provider != "ollama"
+            raw_endpoint == OLLAMA_DEFAULT_ENDPOINT and self.provider not in ("ollama", "llamacpp")
         ):
             if self.provider == "claude":
                 raw_endpoint = CLAUDE_DEFAULT_ENDPOINT
             elif self.provider == "openai":
                 raw_endpoint = OPENAI_DEFAULT_ENDPOINT
+            elif self.provider == "llamacpp":
+                raw_endpoint = LLAMACPP_DEFAULT_ENDPOINT
             else:
                 raw_endpoint = OLLAMA_DEFAULT_ENDPOINT
         self.endpoint = raw_endpoint
@@ -244,8 +248,11 @@ class AIClient:
             ],
             "temperature": 0.7,
             "stream": False,
-            "chat_template_kwargs": {"enable_thinking": False},
         }
+        if self.provider == "ollama":
+            payload["think"] = True
+        elif self.provider == "llamacpp":
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
 
         logger.debug("[llm] generate request model=%s timeout=%ss prompt_chars=%d",
                      self.model, t, len(system) + len(user))
@@ -306,8 +313,11 @@ class AIClient:
             "tools":       tools,
             "tool_choice": "auto",
             "stream":      False,
-            "chat_template_kwargs": {"enable_thinking": False},
         }
+        if self.provider == "ollama":
+            payload["think"] = True
+        elif self.provider == "llamacpp":
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
         msg_summary = [{"role": m["role"], "chars": len(str(m.get("content", "")))}
                        for m in messages]
         logger.debug("[llm] tool-call request model=%s timeout=%ss messages=%s tools=%s",

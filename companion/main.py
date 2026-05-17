@@ -1061,7 +1061,8 @@ def _build_system_prompt() -> str:
         - Tone: confident, warm, genuine - never sycophantic
         - Start with a salutation (e.g. "Dear Hiring Team,")
         - Highlight 2-3 specific skills or experiences from the resume that
-          directly match the job requirements
+          directly match the job requirements. Use actual numbers, project
+          names, and concrete outcomes from the resume - never vague summaries.
         - End with a professional closing and the applicant's name
         - Do NOT include a date, subject line, or postal addresses
         - Output ONLY the cover letter - no preamble, no commentary
@@ -1069,6 +1070,21 @@ def _build_system_prompt() -> str:
           quotes, curly apostrophes, ellipsis characters, or any Unicode
           punctuation. Use a plain hyphen (-) instead of any dash.
         - Do NOT add trailing spaces after sentences or at the end of lines.
+        - No emojis or special symbols of any kind.
+
+        Writing style (to sound natural and human):
+        - Vary sentence length. Mix short sentences (under 8 words) with
+          longer ones. Do not write every sentence at the same length.
+        - Vary paragraph length. Not every paragraph should be the same size.
+        - Use contractions naturally: I've, I'd, I'm, you'll, it's.
+        - Write in active voice with strong verbs: built, shipped, cut, led,
+          designed - not "was responsible for" or "helped to facilitate".
+        - BANNED words and phrases - never use any of these:
+          excited, thrilled, delighted, passionate, leverage, delve, foster,
+          align with, showcase, demonstrate, furthermore, moreover, in
+          conclusion, I am writing to express, I would be an excellent fit,
+          I am eager to, synergy, dynamic, fast-paced, results-driven,
+          detail-oriented, hard-working, team player, go-getter.
     """)
 
 

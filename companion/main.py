@@ -618,6 +618,53 @@ def delete_parser_endpoint(domain: str, _: None = Depends(_require_token)):
     return result
 
 
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page():
+    token = CFG.get("auth_token", "")
+    return HTMLResponse(content=_SETTINGS_HTML.replace("%%AUTH_TOKEN%%", token))
+
+
+@app.get("/config")
+def get_config(_: None = Depends(_require_token)):
+    data = cfg_module.get_config_for_ui(CFG)
+    max_words = CFG["cover_letter"].get("max_words", 450)
+    language  = CFG["cover_letter"].get("language", "English")
+    if not data["cover_letter"]["system_instructions"]:
+        data["cover_letter"]["system_instructions"] = _default_system_prompt(max_words, language)
+    return data
+
+
+class ConfigUpdate(BaseModel):
+    ai: dict = {}
+    resume: dict = {}
+    cover_letter: dict = {}
+
+
+@app.post("/config")
+def update_config(req: ConfigUpdate, _: None = Depends(_require_token)):
+    section_updates: dict = {}
+
+    allowed_ai = {"provider", "model", "endpoint", "api_key", "timeout", "tool_timeout"}
+    allowed_resume = {"path"}
+    allowed_cover = {"max_words", "language", "system_instructions", "user_instructions"}
+
+    if req.ai:
+        section_updates["ai"] = {k: v for k, v in req.ai.items() if k in allowed_ai}
+    if req.resume:
+        section_updates["resume"] = {k: v for k, v in req.resume.items() if k in allowed_resume}
+    if req.cover_letter:
+        section_updates["cover_letter"] = {k: v for k, v in req.cover_letter.items() if k in allowed_cover}
+
+    cfg_module.patch_config_bulk(section_updates)
+
+    # Reload the in-memory config so changes take effect immediately
+    global CFG, AI
+    CFG = cfg_module.load()
+    AI  = ai_module.AIClient(CFG["ai"])
+
+    return {"ok": True}
+
+
 @app.get("/stats", response_class=HTMLResponse)
 def stats_page():
     token = CFG.get("auth_token", "")
@@ -658,6 +705,335 @@ def delete_filler_endpoint(domain: str, _: None = Depends(_require_token)):
         return {"deleted": domain}
     raise HTTPException(status_code=404, detail=f"No filler for {domain!r}")
 
+
+# ── Settings page HTML ───────────────────────────────────────────────────────
+
+_SETTINGS_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>grapply - Settings</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    :root{--bg:#0f1117;--surface:#1a1d27;--border:#2a2d3a;--accent:#6c63ff;--ok:#4caf7d;--danger:#e05252;--text:#e8eaf0;--muted:#7b7f96}
+    body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;min-height:100vh}
+    header{padding:20px 32px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:16px}
+    .logo{font-weight:700;font-size:20px;letter-spacing:-.3px}.logo span{color:var(--accent)}
+    .subtitle{color:var(--muted);font-size:13px}
+    main{max-width:760px;margin:0 auto;padding:28px 24px 60px}
+    section{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:22px 24px;margin-bottom:20px}
+    h2{font-size:13px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+    .field{margin-bottom:14px}
+    .field:last-child{margin-bottom:0}
+    label{display:block;font-size:12px;font-weight:500;color:var(--muted);margin-bottom:5px}
+    input[type=text],input[type=password],input[type=number],select,textarea{
+      width:100%;background:#0f1117;border:1px solid var(--border);border-radius:6px;
+      color:var(--text);font-size:13px;padding:8px 10px;outline:none;font-family:inherit}
+    input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+    textarea{resize:vertical;line-height:1.5}
+    small{display:block;color:var(--muted);font-size:11px;margin-top:4px}
+    .mode-row{display:flex;gap:12px;margin-bottom:16px}
+    .mode-btn{flex:1;padding:9px;border-radius:7px;border:1px solid var(--border);background:var(--bg);
+      color:var(--muted);cursor:pointer;font-size:13px;font-weight:500;transition:all .15s;text-align:center}
+    .mode-btn.active{border-color:var(--accent);color:var(--accent);background:rgba(108,99,255,.08)}
+    .provider-row{display:flex;gap:10px;margin-bottom:14px}
+    .provider-btn{flex:1;padding:8px;border-radius:7px;border:1px solid var(--border);background:var(--bg);
+      color:var(--muted);cursor:pointer;font-size:12px;font-weight:500;transition:all .15s;text-align:center}
+    .provider-btn.active{border-color:var(--accent);color:var(--accent);background:rgba(108,99,255,.08)}
+    .hidden{display:none}
+    .save-bar{position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-top:1px solid var(--border);
+      padding:14px 24px;display:flex;align-items:center;gap:12px}
+    .btn-save{background:var(--accent);color:#fff;border:none;border-radius:7px;padding:9px 28px;
+      font-size:13px;font-weight:600;cursor:pointer;transition:opacity .15s}
+    .btn-save:hover{opacity:.85}
+    .btn-save:disabled{opacity:.5;cursor:not-allowed}
+    .status{font-size:12px;color:var(--muted)}
+    .status.ok{color:var(--ok)}.status.err{color:var(--danger)}
+    select option{background:#1a1d27}
+  </style>
+</head>
+<body>
+<header>
+  <div class="logo">gr<span>apply</span></div>
+  <span class="subtitle">Settings</span>
+</header>
+<main>
+
+  <!-- Resume -->
+  <section>
+    <h2>Resume / CV</h2>
+    <div class="field">
+      <label>Path to resume file (PDF, MD, or TXT)</label>
+      <input type="text" id="resume-path" placeholder="/home/user/Documents/resume.pdf">
+      <small>Full path on this machine. Used for cover letter generation and profile extraction.</small>
+    </div>
+  </section>
+
+  <!-- AI Model -->
+  <section>
+    <h2>AI Model</h2>
+
+    <div class="mode-row">
+      <button class="mode-btn" id="btn-online" onclick="setMode('online')">Online (Cloud)</button>
+      <button class="mode-btn" id="btn-offline" onclick="setMode('offline')">Offline (Local)</button>
+    </div>
+
+    <!-- Online -->
+    <div id="online-opts" class="hidden">
+      <div class="provider-row">
+        <button class="provider-btn" id="btn-openai" onclick="setOnlineProvider('openai')">OpenAI</button>
+        <button class="provider-btn" id="btn-claude" onclick="setOnlineProvider('claude')">Anthropic / Claude</button>
+      </div>
+      <div class="field">
+        <label>Model</label>
+        <select id="model-preset" onchange="onPresetChange()"></select>
+      </div>
+      <div class="field hidden" id="custom-model-field">
+        <label>Custom model name</label>
+        <input type="text" id="custom-model" placeholder="e.g. gpt-4o-2024-11-20">
+      </div>
+      <div class="field">
+        <label>API Key</label>
+        <input type="password" id="api-key" placeholder="sk-... or sk-ant-...">
+      </div>
+    </div>
+
+    <!-- Offline -->
+    <div id="offline-opts" class="hidden">
+      <div class="provider-row">
+        <button class="provider-btn" id="btn-ollama" onclick="setOfflineProvider('ollama')">Ollama</button>
+        <button class="provider-btn" id="btn-llamacpp" onclick="setOfflineProvider('llamacpp')">llama.cpp server</button>
+      </div>
+      <div class="field">
+        <label>Endpoint URL</label>
+        <input type="text" id="endpoint" placeholder="http://localhost:8080">
+      </div>
+      <div class="field">
+        <label>Model name</label>
+        <input type="text" id="offline-model" placeholder="llama3.2 or model.gguf">
+        <small>For llama.cpp: use the filename of the GGUF (without path). For Ollama: use the model tag.</small>
+      </div>
+    </div>
+  </section>
+
+  <!-- Cover Letter -->
+  <section>
+    <h2>Cover Letter</h2>
+    <div class="field" style="display:flex;gap:14px">
+      <div style="flex:1">
+        <label>Max words</label>
+        <input type="number" id="max-words" min="100" max="1000" step="50">
+      </div>
+      <div style="flex:1">
+        <label>Language</label>
+        <input type="text" id="language" placeholder="English">
+      </div>
+    </div>
+    <div class="field">
+      <label>System instructions</label>
+      <small>How the AI should write cover letters. Pre-filled with the built-in anti-detection prompt.</small>
+      <textarea id="system-instructions" rows="18" style="margin-top:6px;font-size:12px"></textarea>
+    </div>
+    <div class="field">
+      <label>Default user instructions</label>
+      <small>Applied to every cover letter by default (e.g. "I need an offer letter for visa purposes").</small>
+      <textarea id="user-instructions" rows="4" style="margin-top:6px" placeholder="Optional - leave empty for none"></textarea>
+    </div>
+  </section>
+
+</main>
+
+<div class="save-bar">
+  <button class="btn-save" id="btn-save" onclick="saveSettings()">Save Settings</button>
+  <span class="status" id="status"></span>
+</div>
+
+<script>
+const TOKEN = '%%AUTH_TOKEN%%';
+const H = Object.assign({'Content-Type':'application/json'}, TOKEN ? {'X-Grapply-Token':TOKEN} : {});
+
+const ONLINE_PROVIDERS = ['openai', 'claude'];
+const OFFLINE_PROVIDERS = ['ollama', 'llamacpp'];
+
+const MODEL_PRESETS = {
+  openai: [
+    {id:'gpt-4o-mini',   label:'GPT-4o mini'},
+    {id:'gpt-4o',        label:'GPT-4o'},
+    {id:'gpt-4.1',       label:'GPT-4.1'},
+    {id:'gpt-4.1-mini',  label:'GPT-4.1 mini'},
+    {id:'gpt-4.1-nano',  label:'GPT-4.1 nano'},
+    {id:'o1-mini',       label:'o1 mini'},
+    {id:'o3-mini',       label:'o3 mini'},
+    {id:'o4-mini',       label:'o4 mini'},
+    {id:'__custom__',    label:'Custom model...'},
+  ],
+  claude: [
+    {id:'claude-haiku-4-5-20251001', label:'Claude Haiku 4.5'},
+    {id:'claude-sonnet-4-5',         label:'Claude Sonnet 4.5'},
+    {id:'claude-sonnet-4-6',         label:'Claude Sonnet 4.6'},
+    {id:'claude-opus-4-7',           label:'Claude Opus 4.7'},
+    {id:'__custom__',                label:'Custom model...'},
+  ],
+};
+
+const DEFAULT_ENDPOINTS = {
+  openai: 'https://api.openai.com',
+  claude: 'https://api.anthropic.com',
+  ollama: 'http://localhost:11434',
+  llamacpp: 'http://localhost:8080',
+};
+
+let state = {
+  mode: 'offline',
+  onlineProvider: 'openai',
+  offlineProvider: 'llamacpp',
+};
+
+function setMode(m) {
+  state.mode = m;
+  document.getElementById('btn-online').classList.toggle('active', m === 'online');
+  document.getElementById('btn-offline').classList.toggle('active', m === 'offline');
+  document.getElementById('online-opts').classList.toggle('hidden', m !== 'online');
+  document.getElementById('offline-opts').classList.toggle('hidden', m !== 'offline');
+}
+
+function setOnlineProvider(p) {
+  state.onlineProvider = p;
+  document.getElementById('btn-openai').classList.toggle('active', p === 'openai');
+  document.getElementById('btn-claude').classList.toggle('active', p === 'claude');
+  populatePresets(p);
+}
+
+function setOfflineProvider(p) {
+  state.offlineProvider = p;
+  document.getElementById('btn-ollama').classList.toggle('active', p === 'ollama');
+  document.getElementById('btn-llamacpp').classList.toggle('active', p === 'llamacpp');
+  const ep = document.getElementById('endpoint');
+  if (!ep.value || Object.values(DEFAULT_ENDPOINTS).includes(ep.value)) {
+    ep.value = DEFAULT_ENDPOINTS[p] || '';
+  }
+}
+
+function populatePresets(provider, currentModel) {
+  const sel = document.getElementById('model-preset');
+  const presets = MODEL_PRESETS[provider] || [];
+  sel.innerHTML = presets.map(p => `<option value="${p.id}">${p.label}</option>`).join('');
+  const match = presets.find(p => p.id === currentModel);
+  if (match) {
+    sel.value = currentModel;
+  } else if (currentModel) {
+    sel.value = '__custom__';
+    document.getElementById('custom-model').value = currentModel;
+    document.getElementById('custom-model-field').classList.remove('hidden');
+  } else {
+    sel.value = presets[0]?.id || '';
+  }
+  onPresetChange();
+}
+
+function onPresetChange() {
+  const isCustom = document.getElementById('model-preset').value === '__custom__';
+  document.getElementById('custom-model-field').classList.toggle('hidden', !isCustom);
+}
+
+function getSelectedModel() {
+  const preset = document.getElementById('model-preset').value;
+  if (preset === '__custom__') return document.getElementById('custom-model').value.trim();
+  return preset;
+}
+
+async function load() {
+  try {
+    const r = await fetch('/config', {headers: H});
+    if (!r.ok) { setStatus('Failed to load config: ' + r.status, true); return; }
+    const cfg = await r.json();
+
+    document.getElementById('resume-path').value = cfg.resume?.path || '';
+    document.getElementById('max-words').value = cfg.cover_letter?.max_words || 450;
+    document.getElementById('language').value = cfg.cover_letter?.language || 'English';
+    document.getElementById('system-instructions').value = cfg.cover_letter?.system_instructions || '';
+    document.getElementById('user-instructions').value = cfg.cover_letter?.user_instructions || '';
+
+    const provider = cfg.ai?.provider || 'llamacpp';
+    const model    = cfg.ai?.model    || '';
+    const endpoint = cfg.ai?.endpoint || '';
+    const apiKey   = cfg.ai?.api_key  || '';
+
+    document.getElementById('api-key').value  = apiKey;
+    document.getElementById('endpoint').value = endpoint;
+
+    if (ONLINE_PROVIDERS.includes(provider)) {
+      setMode('online');
+      setOnlineProvider(provider);
+      populatePresets(provider, model);
+    } else {
+      setMode('offline');
+      setOfflineProvider(provider);
+      document.getElementById('offline-model').value = model;
+      if (endpoint) document.getElementById('endpoint').value = endpoint;
+    }
+  } catch(e) {
+    setStatus('Error loading settings: ' + e.message, true);
+  }
+}
+
+function setStatus(msg, isErr) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = 'status' + (isErr ? ' err' : ' ok');
+  if (!isErr) setTimeout(() => { if (el.textContent === msg) el.textContent = ''; }, 3000);
+}
+
+async function saveSettings() {
+  const btn = document.getElementById('btn-save');
+  btn.disabled = true;
+  setStatus('Saving...', false);
+
+  const provider = state.mode === 'online' ? state.onlineProvider : state.offlineProvider;
+  const model    = state.mode === 'online'
+    ? getSelectedModel()
+    : document.getElementById('offline-model').value.trim();
+  const endpoint = state.mode === 'online'
+    ? (DEFAULT_ENDPOINTS[provider] || '')
+    : document.getElementById('endpoint').value.trim();
+
+  const payload = {
+    ai: {
+      provider,
+      model,
+      endpoint,
+      api_key: document.getElementById('api-key').value.trim(),
+    },
+    resume: {
+      path: document.getElementById('resume-path').value.trim(),
+    },
+    cover_letter: {
+      max_words:           parseInt(document.getElementById('max-words').value) || 450,
+      language:            document.getElementById('language').value.trim() || 'English',
+      system_instructions: document.getElementById('system-instructions').value,
+      user_instructions:   document.getElementById('user-instructions').value,
+    },
+  };
+
+  try {
+    const r = await fetch('/config', {method:'POST', headers:H, body:JSON.stringify(payload)});
+    if (r.ok) {
+      setStatus('Settings saved.', false);
+    } else {
+      const t = await r.text();
+      setStatus('Save failed: ' + t, true);
+    }
+  } catch(e) {
+    setStatus('Error: ' + e.message, true);
+  }
+  btn.disabled = false;
+}
+
+load();
+</script>
+</body>
+</html>"""
 
 # ── Stats page HTML ──────────────────────────────────────────────────────────
 
@@ -1048,9 +1424,7 @@ _STATS_HTML = """<!DOCTYPE html>
 
 # ── Prompt builders ───────────────────────────────────────────────────────────
 
-def _build_system_prompt() -> str:
-    max_words = CFG["cover_letter"].get("max_words", 450)
-    language  = CFG["cover_letter"].get("language", "English")
+def _default_system_prompt(max_words: int, language: str) -> str:
     return textwrap.dedent(f"""\
         You are an expert cover letter writer. Your task is to produce a
         personalized, professional cover letter in Markdown format.
@@ -1088,6 +1462,15 @@ def _build_system_prompt() -> str:
     """)
 
 
+def _build_system_prompt() -> str:
+    max_words = CFG["cover_letter"].get("max_words", 450)
+    language  = CFG["cover_letter"].get("language", "English")
+    custom    = CFG["cover_letter"].get("system_instructions", "").strip()
+    if custom:
+        return custom
+    return _default_system_prompt(max_words, language)
+
+
 def _build_user_prompt(req: GenerateRequest) -> str:
     parts = [
         f"## Role\n{req.job_title} at {req.company}",
@@ -1102,8 +1485,9 @@ def _build_user_prompt(req: GenerateRequest) -> str:
         )
         parts.append(f"## My Profile\n{profile_lines}")
 
-    if req.global_instructions.strip():
-        parts.append(f"## Global Instructions (always apply)\n{req.global_instructions.strip()}")
+    global_instr = req.global_instructions.strip() or CFG["cover_letter"].get("user_instructions", "").strip()
+    if global_instr:
+        parts.append(f"## Global Instructions (always apply)\n{global_instr}")
 
     if req.per_job_instructions.strip():
         parts.append(

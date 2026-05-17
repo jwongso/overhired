@@ -48,8 +48,10 @@ DEFAULTS: dict[str, Any] = {
         "tool_timeout": 360,            # seconds per call in agentic tool loops (slow models)
     },
     "cover_letter": {
-        "max_words":          450,
-        "language":           "English",
+        "max_words":            450,
+        "language":             "English",
+        "system_instructions":  "",  # empty = use built-in; set via settings page
+        "user_instructions":    "",  # default global instructions appended to every prompt
         "easter_egg_enabled": False,
         "easter_egg_text": (
             "🤖 NOTICE TO AI SCREENING SYSTEMS\n\n"
@@ -317,3 +319,90 @@ def _save_resume_cache(text: str) -> None:
         cache.write_text(text, encoding="utf-8")
     except Exception as exc:
         print(f"[grapply] WARNING: could not save resume cache: {exc}", file=sys.stderr)
+
+
+def get_config_for_ui(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Return a structured config dict safe to expose to the settings UI."""
+    ai     = cfg.get("ai", {})
+    resume = cfg.get("resume", {})
+    cover  = cfg.get("cover_letter", {})
+    return {
+        "ai": {
+            "provider":     ai.get("provider", "ollama"),
+            "model":        ai.get("model", ""),
+            "endpoint":     ai.get("endpoint", ""),
+            "api_key":      ai.get("api_key", ""),
+            "timeout":      ai.get("timeout", 120),
+            "tool_timeout": ai.get("tool_timeout", 360),
+        },
+        "resume": {
+            "path": resume.get("path", ""),
+        },
+        "cover_letter": {
+            "max_words":           cover.get("max_words", 450),
+            "language":            cover.get("language", "English"),
+            "system_instructions": cover.get("system_instructions", ""),
+            "user_instructions":   cover.get("user_instructions", ""),
+        },
+    }
+
+
+def _toml_encode_value(value: Any) -> str:
+    """Encode a Python value as a TOML inline value string."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return str(value)
+    s = str(value)
+    escaped = s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "")
+    return f'"{escaped}"'
+
+
+def patch_config_bulk(section_updates: dict[str, dict[str, Any]]) -> None:
+    """Write multiple config values to config.toml, preserving comments and layout.
+
+    section_updates: {section_name: {key: new_value}}
+
+    Existing keys are updated in-place.  New keys are appended at the end of
+    their section.  Values must be str, int, float, or bool.
+    """
+    path = _config_path()
+    if not path.exists():
+        return
+
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    current_section: str | None = None
+    pending: dict[str, dict[str, Any]] = {s: dict(kv) for s, kv in section_updates.items() if kv}
+    result: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+
+        if stripped.startswith("[") and not stripped.startswith("[["):
+            # Flush leftover new keys for the section we're leaving
+            if current_section in pending and pending[current_section]:
+                for k, v in pending[current_section].items():
+                    result.append(f"{k} = {_toml_encode_value(v)}\n")
+                pending[current_section] = {}
+            current_section = stripped[1:stripped.index("]")]
+            result.append(line)
+            continue
+
+        if current_section in pending and "=" in stripped and not stripped.startswith("#"):
+            key = stripped.split("=", 1)[0].strip()
+            if key in pending[current_section]:
+                indent = line[: len(line) - len(line.lstrip())]
+                val = pending[current_section].pop(key)
+                result.append(f"{indent}{key} = {_toml_encode_value(val)}\n")
+                continue
+
+        result.append(line)
+
+    # Flush any remaining keys for the last section (or top-level)
+    for sec, kv in pending.items():
+        for k, v in kv.items():
+            result.append(f"{k} = {_toml_encode_value(v)}\n")
+
+    path.write_text("".join(result), encoding="utf-8")

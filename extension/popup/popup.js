@@ -765,7 +765,8 @@ function App() {
     return () => clearInterval(timer);
   }, []);
 
-  const statsUrl = `${companionUrl(settings)}/stats`;
+  const statsUrl    = `${companionUrl(settings)}/stats`;
+  const settingsUrl = `${companionUrl(settings)}/settings`;
 
   return html`
     <div>
@@ -779,10 +780,14 @@ function App() {
       <${CompanionBanner} health=${health} />
       <${GenerateTab} settings=${settings} health=${health} />
 
-      <div style="padding:10px 14px;border-top:1px solid var(--border)">
-        <button class="btn btn-secondary btn-full" style="font-size:11px;padding:6px"
+      <div style="padding:10px 14px;border-top:1px solid var(--border);display:flex;gap:8px">
+        <button class="btn btn-secondary" style="font-size:11px;padding:6px;flex:1"
+          onClick=${() => chrome.tabs.create({ url: settingsUrl })}>
+          Settings
+        </button>
+        <button class="btn btn-secondary" style="font-size:11px;padding:6px;flex:1"
           onClick=${() => chrome.tabs.create({ url: statsUrl })}>
-          Show Usage Stats
+          Usage Stats
         </button>
       </div>
     </div>`;

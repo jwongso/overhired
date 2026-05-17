@@ -742,6 +742,8 @@ _SETTINGS_HTML = """<!DOCTYPE html>
       color:var(--muted);cursor:pointer;font-size:12px;font-weight:500;transition:all .15s;text-align:center}
     .provider-btn.active{border-color:var(--accent);color:var(--accent);background:rgba(108,99,255,.08)}
     .hidden{display:none}
+    .running-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(76,175,125,.1);border:1px solid rgba(76,175,125,.3);border-radius:6px;padding:5px 10px;font-size:11px;color:var(--ok);margin-bottom:14px}
+    .running-badge .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);flex-shrink:0}
     .save-bar{position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-top:1px solid var(--border);
       padding:14px 24px;display:flex;align-items:center;gap:12px}
     .btn-save{background:var(--accent);color:#fff;border:none;border-radius:7px;padding:9px 28px;
@@ -773,6 +775,11 @@ _SETTINGS_HTML = """<!DOCTYPE html>
   <!-- AI Model -->
   <section>
     <h2>AI Model</h2>
+
+    <div id="running-badge" class="running-badge hidden">
+      <span class="dot"></span>
+      <span id="running-model">Loading...</span>
+    </div>
 
     <div class="mode-row">
       <button class="mode-btn" id="btn-online" onclick="setMode('online')">Online (Cloud)</button>
@@ -945,9 +952,21 @@ function getSelectedModel() {
 
 async function load() {
   try {
-    const r = await fetch('/config', {headers: H});
-    if (!r.ok) { setStatus('Failed to load config: ' + r.status, true); return; }
-    const cfg = await r.json();
+    const [cfgRes, healthRes] = await Promise.all([
+      fetch('/config', {headers: H}),
+      fetch('/health').catch(() => null),
+    ]);
+    if (!cfgRes.ok) { setStatus('Failed to load config: ' + cfgRes.status, true); return; }
+    const cfg = await cfgRes.json();
+
+    if (healthRes?.ok) {
+      const h = await healthRes.json();
+      const name = h.ai_model || '';
+      if (name) {
+        document.getElementById('running-model').textContent = 'Running: ' + name;
+        document.getElementById('running-badge').classList.remove('hidden');
+      }
+    }
 
     document.getElementById('resume-path').value = cfg.resume?.path || '';
     document.getElementById('max-words').value = cfg.cover_letter?.max_words || 450;

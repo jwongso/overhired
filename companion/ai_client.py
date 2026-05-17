@@ -244,9 +244,8 @@ class AIClient:
             ],
             "temperature": 0.7,
             "stream": False,
+            "chat_template_kwargs": {"enable_thinking": False},
         }
-        if self.provider == "ollama":
-            payload["think"] = True   # expose chain-of-thought in companion.log
 
         logger.debug("[llm] generate request model=%s timeout=%ss prompt_chars=%d",
                      self.model, t, len(system) + len(user))
@@ -282,8 +281,9 @@ class AIClient:
                    {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens})
 
         try:
-            reply = data["choices"][0]["message"]["content"].strip()
-            logger.debug("[llm] reply=%r", reply)
+            message = data["choices"][0]["message"]
+            reply = (message.get("content") or "").strip()
+            logger.debug("[llm] reply=%r", reply[:200])
             return reply
         except (KeyError, IndexError) as exc:
             raise AIError(f"Unexpected response shape: {exc}\n{json.dumps(data)[:300]}")
@@ -306,10 +306,8 @@ class AIClient:
             "tools":       tools,
             "tool_choice": "auto",
             "stream":      False,
+            "chat_template_kwargs": {"enable_thinking": False},
         }
-        if self.provider == "ollama":
-            payload["think"] = True   # expose chain-of-thought in companion.log
-
         msg_summary = [{"role": m["role"], "chars": len(str(m.get("content", "")))}
                        for m in messages]
         logger.debug("[llm] tool-call request model=%s timeout=%ss messages=%s tools=%s",

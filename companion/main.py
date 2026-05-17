@@ -959,11 +959,12 @@ async function load() {
     if (!cfgRes.ok) { setStatus('Failed to load config: ' + cfgRes.status, true); return; }
     const cfg = await cfgRes.json();
 
+    let runningModel = '';
     if (healthRes?.ok) {
       const h = await healthRes.json();
-      const name = h.ai_model || '';
-      if (name) {
-        document.getElementById('running-model').textContent = 'Running: ' + name;
+      runningModel = h.ai_model || '';
+      if (runningModel) {
+        document.getElementById('running-model').textContent = 'Running: ' + runningModel;
         document.getElementById('running-badge').classList.remove('hidden');
       }
     }
@@ -989,7 +990,7 @@ async function load() {
     } else {
       setMode('offline');
       setOfflineProvider(provider);
-      document.getElementById('offline-model').value = model;
+      document.getElementById('offline-model').value = runningModel || model;
       if (endpoint) document.getElementById('endpoint').value = endpoint;
     }
   } catch(e) {

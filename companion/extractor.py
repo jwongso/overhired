@@ -33,7 +33,19 @@ if TYPE_CHECKING:
     from ai_client import AIClient
 
 _EMPTY = {"title": "", "company": "", "description": "", "location": ""}
+
+# Per-domain lock to prevent duplicate parser generation and cache race conditions.
+_domain_locks: dict[str, _threading.Lock] = {}
+_domain_locks_guard = _threading.Lock()
 _log = logging.getLogger(__name__)
+
+
+def _get_domain_lock(domain: str) -> _threading.Lock:
+    """Return a per-domain lock, creating one atomically if needed."""
+    with _domain_locks_guard:
+        if domain not in _domain_locks:
+            _domain_locks[domain] = _threading.Lock()
+        return _domain_locks[domain]
 
 # ── HTML cleaning strategies ──────────────────────────────────────────────────
 
@@ -615,6 +627,9 @@ def clean_html(html: str, domain: str = "", max_chars: int = 12_000) -> str:
       2. Catalog winner   — historically best strategy from tracker DB (fast path).
       3. Benchmark        — run all strategies, pick winner, save to catalog.
     """
+    if len(html) < 100:
+        return html.strip()
+
     import tracker
 
     # ── 1. Pinned strategy (structured domains) ───────────────────────────────
@@ -1300,8 +1315,13 @@ def extract(domain: str, page_text: str, ai: "AIClient",
         # Parser not yet cached → generate in background; next visit will be fast
         _safe_domain = _make_safe_domain(domain)
         parser_file  = PARSERS_DIR / f"{_safe_domain}.py"
-        if not parser_file.exists():
-            _spawn_parser_generation(domain, page_text, page_html, prog_result, ai)
+        lock = _get_domain_lock(domain)
+        if lock.acquire(blocking=False):
+            try:
+                if not parser_file.exists():
+                    _spawn_parser_generation(domain, page_text, page_html, prog_result, ai)
+            finally:
+                lock.release()
         return prog_result
 
     # ── 3. LLM extraction (Phase 1 only — focused, JSON only) ────────────────
@@ -1343,7 +1363,15 @@ def extract(domain: str, page_text: str, ai: "AIClient",
               domain, elapsed, llm_result.get("title"))
 
     # ── 4. Spawn background parser generation ─────────────────────────────────
-    _spawn_parser_generation(domain, page_text, page_html, llm_result, ai)
+    lock = _get_domain_lock(domain)
+    if lock.acquire(blocking=False):
+        try:
+            _safe_domain = _make_safe_domain(domain)
+            parser_file = PARSERS_DIR / f"{_safe_domain}.py"
+            if not parser_file.exists():
+                _spawn_parser_generation(domain, page_text, page_html, llm_result, ai)
+        finally:
+            lock.release()
 
     return llm_result
 

@@ -46,6 +46,9 @@ import ai_client as ai_module
 _LOG_PATH = Path("~/.grapply/companion.log").expanduser()
 _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
+import threading as _threading
+_cfg_lock = _threading.Lock()
+
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
@@ -240,6 +243,15 @@ def _format_insight(data: dict, role: str, company: str) -> str:
     return "\n".join(lines)
 
 
+def _append_error(dest: Path, msg: str) -> None:
+    """Append an error line to _errors.log so the extension can report failures."""
+    try:
+        with open(dest / "_errors.log", "a", encoding="utf-8") as f:
+            f.write(f"{date.today().isoformat()} {msg}\n")
+    except OSError:
+        pass
+
+
 def _bg_write_summary(dest: Path, domain: str, company: str) -> None:
     logger.info("[analysis] summary.md starting — fetching %s", domain)
     try:
@@ -248,6 +260,7 @@ def _bg_write_summary(dest: Path, domain: str, company: str) -> None:
         logger.info("[analysis] summary.md done for %s", company)
     except Exception as exc:
         logger.warning("[analysis] summary.md failed: %s", exc)
+        _append_error(dest, f"summary.md failed: {exc}")
 
 
 def _populate_profile_from_resume() -> None:
@@ -316,6 +329,7 @@ def _bg_write_score(dest: Path, job_description: str, resume_text: str, role: st
         logger.info("[analysis] score.md done — score=%s recommendation=%s", data.get("score"), data.get("recommendation"))
     except Exception as exc:
         logger.warning("[analysis] score.md failed: %s", exc)
+        _append_error(dest, f"score.md failed: {exc}")
 
 
 def _bg_write_insight(dest: Path, job_description: str, role: str, company: str) -> None:
@@ -327,6 +341,7 @@ def _bg_write_insight(dest: Path, job_description: str, role: str, company: str)
                     data.get("verdict"), len(data.get("red_flags", [])))
     except Exception as exc:
         logger.warning("[analysis] insight.md failed: %s", exc)
+        _append_error(dest, f"insight.md failed: {exc}")
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -433,7 +448,7 @@ def save(req: SaveRequest, background_tasks: BackgroundTasks, _: None = Depends(
     else:
         logger.info("[save] no domain — skipping summary.md")
 
-    job_id = hashlib.md5(str(dest).encode()).hexdigest()[:12]
+    job_id = hashlib.blake2b(str(dest).encode(), digest_size=6).hexdigest()
     return SaveResponse(md_path=str(md_path), html_path=str(html_path), job_id=job_id)
 
 
@@ -449,7 +464,7 @@ def job_files(job_id: str, _: None = Depends(_require_token)):
         # Legacy structure: company/role (2 levels) — still supported
         for path in out_root.rglob("cover_letter.md"):
             candidate = path.parent
-            if hashlib.md5(str(candidate).encode()).hexdigest()[:12] == job_id:
+            if hashlib.blake2b(str(candidate).encode(), digest_size=6).hexdigest() == job_id:
                 dest = candidate
                 break
     if dest is None:
@@ -592,10 +607,15 @@ def benchmark_catalog(domain: str = ""):
     return tracker.get_strategy_catalog(domain or None)
 
 
+_MAX_FILL_VALUE_LEN = 2000  # Truncate fill_data values to prevent prompt injection bloat
+
+
 @app.post("/fill", response_model=FillResponse)
 def fill_form(req: FillRequest, _: None = Depends(_require_token)):
+    # Sanitize fill_data: truncate values to prevent oversized prompt injection
+    clean_fill = {str(k)[:100]: str(v)[:_MAX_FILL_VALUE_LEN] for k, v in req.fill_data.items()}
     logger.info("[fill] domain=%s fields=%d", req.domain, len(req.form_snapshot))
-    operations = ats_filler_module.get_filler(req.domain, req.form_snapshot, AI, req.fill_data)
+    operations = ats_filler_module.get_filler(req.domain, req.form_snapshot, AI, clean_fill)
     if not operations:
         raise HTTPException(status_code=422, detail="Could not generate a filler for this form")
     cached = ats_filler_module.last_cache_hit()
@@ -659,8 +679,9 @@ def update_config(req: ConfigUpdate, _: None = Depends(_require_token)):
 
     # Reload the in-memory config so changes take effect immediately
     global CFG, AI
-    CFG = cfg_module.load()
-    AI  = ai_module.AIClient(CFG["ai"])
+    with _cfg_lock:
+        CFG = cfg_module.load()
+        AI  = ai_module.AIClient(CFG["ai"])
 
     return {"ok": True}
 

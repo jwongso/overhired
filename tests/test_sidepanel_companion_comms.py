@@ -225,7 +225,7 @@ class TestPollFiles:
         dest = tmp_path / "Acme" / "Engineer"
         dest.mkdir(parents=True)
         (dest / "cover_letter.md").write_text("# Cover")
-        job_id = hashlib.md5(str(dest).encode()).hexdigest()[:12]
+        job_id = hashlib.blake2b(str(dest).encode(), digest_size=6).hexdigest()
 
         original_dir = main.CFG.get("output_dir", "~/grapply-output")
         main.CFG["output_dir"] = str(tmp_path)

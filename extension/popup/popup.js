@@ -8,6 +8,14 @@ import htm                 from '../vendor/htm.module.js';
 
 const html = htm.bind(h);
 
+// Sanitize marked output — strip raw HTML so LLM-generated content cannot inject scripts.
+marked.use({
+  renderer: {
+    html: () => '',
+    html_block: () => '',
+  },
+});
+
 const AUSPICE_URL = 'https://fengshui.overhired.work';
 
 async function fetchAuspice() {
@@ -760,9 +768,8 @@ function App() {
         const stored = await load(['savedJobs']);
         if (!stored.savedJobs?.length) {
           try {
-            const headers = s.companion_token
-              ? { Authorization: `Bearer ${s.companion_token}` } : {};
-            const r = await fetch(`${s.companion_url}/jobs/recent`, { headers });
+            const r = await fetch(`${companionUrl(s)}/jobs/recent`,
+              { headers: companionHeaders(s) });
             if (r.ok) {
               const data = await r.json();
               if (data.jobs?.length) {

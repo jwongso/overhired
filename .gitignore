@@ -27,3 +27,4 @@ extension/*.zip
 extension/wasm/mupdf-wasm.wasm
 extension/wasm/mupdf-wasm.js
 extension/wasm/mupdf.js
+ai_detection_*.md

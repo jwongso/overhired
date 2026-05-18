@@ -44,7 +44,7 @@ class TestExtractEndpoint:
         with patch("extractor.extract", return_value=MOCK_RESULT):
             resp = client.post("/extract", json={"domain": "example.com", "page_text": "..."})
         data = resp.json()
-        assert set(data.keys()) == {"title", "company", "description", "location"}
+        assert {"title", "company", "description", "location", "mode"} == set(data.keys())
         assert data["title"] == "Senior C++ Developer"
 
     def test_extractor_called_with_correct_args(self, client):
@@ -66,9 +66,11 @@ class TestExtractEndpoint:
         resp = client.post("/extract", json={"page_text": "no domain"})
         assert resp.status_code == 422
 
-    def test_missing_page_text_returns_422(self, client):
-        resp = client.post("/extract", json={"domain": "x.com"})
-        assert resp.status_code == 422
+    def test_missing_page_text_defaults_to_empty(self, client):
+        """page_text now defaults to empty string (not required) -- still returns 200."""
+        with patch("extractor.extract", return_value=MOCK_RESULT):
+            resp = client.post("/extract", json={"domain": "x.com"})
+        assert resp.status_code == 200
 
     def test_auth_token_enforced_when_configured(self):
         import main

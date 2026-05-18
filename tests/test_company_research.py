@@ -24,7 +24,7 @@ from analyzer import (
 
 def _make_ai(domain_answer: str = "unknown", extract_response: str = "{}") -> MagicMock:
     ai = MagicMock()
-    def _gen(system, user):
+    def _gen(system, user, **kwargs):
         if "company domain lookup tool" in system:
             return domain_answer
         return extract_response
@@ -225,7 +225,7 @@ class TestResearchCompanyAI:
             "https://www.halterhq.com/"
         )
 
-        def fake_gen(system, user):
+        def fake_gen(system, user, **kwargs):
             if "company domain lookup tool" in system:
                 return "halterhq.com"
             return self._AI_RESPONSE  # company research response
@@ -254,7 +254,7 @@ class TestResearchCompanyAI:
         """Direct company domain → no LLM domain lookup, no Wikipedia."""
         site_resp = _mock_site("<html>" + "Halter " * 50 + "</html>", "https://halterhq.com/")
 
-        def fake_gen(system, user):
+        def fake_gen(system, user, **kwargs):
             return self._AI_RESPONSE
 
         ai = MagicMock(); ai.generate.side_effect = fake_gen
@@ -304,16 +304,24 @@ class TestIntegration:
     def test_research_halter_from_seek_no_hfg_capital(self):
         """End-to-end: LLM must NOT receive HFG Capital content."""
         from ai_client import AIClient
+        from unittest.mock import wraps
         import sys, os; sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../companion"))
         import config as cfg_module
         cfg = cfg_module.load()
         ai = AIClient(cfg["ai"])
 
+        # Wrap generate to capture call args
+        captured_calls = []
+        orig_generate = ai.generate
+        def tracking_generate(*args, **kwargs):
+            captured_calls.append((args, kwargs))
+            return orig_generate(*args, **kwargs)
+        ai.generate = tracking_generate
+
         result = research_company("seek.co.nz", "Halter", ai)
         assert "error" not in result, f"research_company failed: {result}"
 
-        call_args = ai.generate.call_args_list
-        all_prompts = " ".join(str(c) for c in call_args)
+        all_prompts = " ".join(str(c) for c in captured_calls)
         assert "HFG Capital" not in all_prompts, (
-            "LLM was fed HFG Capital content — domain resolution failed!"
+            "LLM was fed HFG Capital content -- domain resolution failed!"
         )

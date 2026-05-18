@@ -77,31 +77,31 @@ class TestTryCached:
         assert result is None
 
 
-# ── _oneshot_extract ──────────────────────────────────────────────────────────
+# ── _phase1_extract (was _oneshot_extract) ────────────────────────────────────
 
-class TestOneshotExtract:
+class TestPhase1Extract:
     def test_parses_clean_json(self):
         ai = _make_ai(text_response=json.dumps({
             "title": "Engineer", "company": "Acme",
             "description": "Build stuff", "location": "Remote"
         }))
-        result = extractor._oneshot_extract(SAMPLE_TEXT, ai)
+        result = extractor._phase1_extract("example.com", SAMPLE_TEXT, ai)
         assert result["title"] == "Engineer"
         assert result["company"] == "Acme"
 
     def test_strips_markdown_fences(self):
         ai = _make_ai(text_response='```json\n{"title":"Dev","company":"X","description":"D","location":""}\n```')
-        result = extractor._oneshot_extract(SAMPLE_TEXT, ai)
+        result = extractor._phase1_extract("example.com", SAMPLE_TEXT, ai)
         assert result["title"] == "Dev"
 
     def test_returns_empty_on_bad_json(self):
         ai = _make_ai(text_response="not json at all")
-        result = extractor._oneshot_extract(SAMPLE_TEXT, ai)
+        result = extractor._phase1_extract("example.com", SAMPLE_TEXT, ai)
         assert result == {"title": "", "company": "", "description": "", "location": ""}
 
     def test_missing_keys_default_to_empty(self):
         ai = _make_ai(text_response='{"title": "Only Title"}')
-        result = extractor._oneshot_extract(SAMPLE_TEXT, ai)
+        result = extractor._phase1_extract("example.com", SAMPLE_TEXT, ai)
         assert result["title"] == "Only Title"
         assert result["company"] == ""
 
@@ -114,45 +114,24 @@ class TestExtract:
         ai = _make_ai()
         result = extractor.extract("example.com", SAMPLE_TEXT, ai)
         assert result["title"] == "Senior C++ Developer"
-        ai.generate_with_tools.assert_not_called()
         ai.generate.assert_not_called()
 
-    def test_agentic_loop_called_on_cache_miss(self, tmp_parsers_dir):
-        # Simulate: agent saves a parser, _try_cached then finds it
-        def fake_generate_with_tools(*args, **kwargs):
-            tool_server.save_parser("example.com", GOOD_CODE)
-            return {"saved": True, "result": {"saved": str(tmp_parsers_dir / "example.com.py")}, "iterations": 2}
-
-        ai = _make_ai()
-        ai.generate_with_tools.side_effect = fake_generate_with_tools
-        result = extractor.extract("example.com", SAMPLE_TEXT, ai)
+    def test_phase1_on_cache_miss(self, tmp_parsers_dir):
+        """On cache miss with no programmatic strategy, Phase 1 LLM extraction is used."""
+        ai = _make_ai(text_response=json.dumps({
+            "title": "Senior C++ Developer", "company": "CompuGroup Medical",
+            "description": "We are hiring talented engineers.", "location": ""
+        }))
+        result = extractor.extract("unknown-domain.com", SAMPLE_TEXT, ai)
         assert result["title"] == "Senior C++ Developer"
-        ai.generate_with_tools.assert_called_once()
+        # Phase 1 calls ai.generate at minimum once (background parser gen may add more)
+        assert ai.generate.call_count >= 1
 
-    def test_falls_back_to_oneshot_on_agent_failure(self, tmp_parsers_dir):
+    def test_falls_back_to_empty_on_llm_failure(self, tmp_parsers_dir):
         ai = _make_ai()
-        ai.generate_with_tools.side_effect = Exception("model doesn't support tools")
-        ai.generate.return_value = json.dumps({
-            "title": "Fallback Title", "company": "FallbackCo",
-            "description": "desc", "location": ""
-        })
+        ai.generate.side_effect = Exception("model timeout")
         result = extractor.extract("unknown.com", SAMPLE_TEXT, ai)
-        assert result["title"] == "Fallback Title"
-
-    def test_page_text_truncated_to_12000(self, tmp_parsers_dir):
-        long_text = "x" * 20000
-        ai = _make_ai()
-        ai.generate_with_tools.return_value = {"saved": False, "result": None, "iterations": 1}
-        ai.generate.return_value = '{"title":"","company":"","description":"","location":""}'
-
-        captured = []
-        real_agentic = extractor._agentic_extract
-        def spy_agentic(domain, text, a):
-            captured.append(len(text))
-            return None
-        with patch.object(extractor, "_agentic_extract", spy_agentic):
-            extractor.extract("any.com", long_text, ai)
-        assert captured[0] <= 12000
+        assert result == {"title": "", "company": "", "description": "", "location": ""}
 
     def test_result_has_all_keys(self, tmp_parsers_dir):
         tool_server.save_parser("example.com", GOOD_CODE)

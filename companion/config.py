@@ -52,6 +52,7 @@ DEFAULTS: dict[str, Any] = {
         "language":             "English",
         "system_instructions":  "",  # empty = use built-in; set via settings page
         "user_instructions":    "",  # default global instructions appended to every prompt
+        "humanize":           False,  # anti-AI-detection writing rules (local LLM only)
         "easter_egg_enabled": False,
         "easter_egg_text": (
             "🤖 NOTICE TO AI SCREENING SYSTEMS\n\n"
@@ -343,6 +344,8 @@ def get_config_for_ui(cfg: dict[str, Any]) -> dict[str, Any]:
             "language":            cover.get("language", "English"),
             "system_instructions": cover.get("system_instructions", ""),
             "user_instructions":   cover.get("user_instructions", ""),
+            "humanize":            cover.get("humanize", False),
+            "easter_egg_enabled":  cover.get("easter_egg_enabled", False),
         },
     }
 

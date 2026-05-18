@@ -666,7 +666,8 @@ def update_config(req: ConfigUpdate, _: None = Depends(_require_token)):
 
     allowed_ai = {"provider", "model", "endpoint", "api_key", "timeout", "tool_timeout"}
     allowed_resume = {"path"}
-    allowed_cover = {"max_words", "language", "system_instructions", "user_instructions"}
+    allowed_cover = {"max_words", "language", "system_instructions", "user_instructions",
+                     "humanize", "easter_egg_enabled"}
 
     if req.ai:
         section_updates["ai"] = {k: v for k, v in req.ai.items() if k in allowed_ai}
@@ -868,6 +869,16 @@ _SETTINGS_HTML = """<!DOCTYPE html>
       <small>Applied to every cover letter by default (e.g. "I need an offer letter for visa purposes").</small>
       <textarea id="user-instructions" rows="4" style="margin-top:6px" placeholder="Optional - leave empty for none"></textarea>
     </div>
+    <div class="field" style="margin-top:12px;display:flex;gap:24px;flex-wrap:wrap">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="chk-humanize"> Enable Humanizer
+        <small style="color:#888;margin-left:4px">(anti-AI-detection, local LLM only)</small>
+      </label>
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="chk-easter-egg"> Include AI easter egg
+        <small style="color:#888;margin-left:4px">(hidden prompt injection comment)</small>
+      </label>
+    </div>
   </section>
 
 </main>
@@ -995,6 +1006,8 @@ async function load() {
     document.getElementById('language').value = cfg.cover_letter?.language || 'English';
     document.getElementById('system-instructions').value = cfg.cover_letter?.system_instructions || '';
     document.getElementById('user-instructions').value = cfg.cover_letter?.user_instructions || '';
+    document.getElementById('chk-humanize').checked = !!cfg.cover_letter?.humanize;
+    document.getElementById('chk-easter-egg').checked = !!cfg.cover_letter?.easter_egg_enabled;
 
     const provider = cfg.ai?.provider || 'llamacpp';
     const model    = cfg.ai?.model    || '';
@@ -1054,6 +1067,8 @@ async function saveSettings() {
       language:            document.getElementById('language').value.trim() || 'English',
       system_instructions: document.getElementById('system-instructions').value,
       user_instructions:   document.getElementById('user-instructions').value,
+      humanize:            document.getElementById('chk-humanize').checked,
+      easter_egg_enabled:  document.getElementById('chk-easter-egg').checked,
     },
   };
 
@@ -1465,6 +1480,30 @@ _STATS_HTML = """<!DOCTYPE html>
 
 # ── Prompt builders ───────────────────────────────────────────────────────────
 
+_HZR = (
+    "eNpdVE1v4zYQvftXDHxJAjhCN9tFgdy82RwCpAngxFn0OBZHFhuKFMiRHfXX941sp+5e9MHhzLz3"
+    "5pEvr6v13et6tXyk1frx/oUumxRC2pN8cK1hvLqdfanojfNIRaJKrIWCxK225DJ3rL7mEMaKlop1Lk"
+    "q6T59bCw3RSaY/aJ+yK2e7UhRKO4Ruvp1iT2L/2maRswKpoeI7Hzif+vpITDntq9lNRS/KWU9gp6q"
+    "fMPcem+fL6OaUMs2/D3r4eEnzava1oodYh8HJ/5J7zkhvZaJFXDzil2h4Wi+GKBM3CqhMjkt7Vc1+"
+    "r+j5kMzbzH1LpU1DcLQRigmlhDeoj8WsE0OOeIA/HrnQ9S+SdfxRzb5V9CNZNkl0ZMqMZ/WTSVA0p"
+    "7ilOhmP4ndTM6noUZT4XOf/8jSzD5C0MRJWeCrU+YjfPvmo1Wz29ny3/L5+XK7+OjjidnZN64IqgS"
+    "HENKtbmm8GH6CnAZxzrluvUqu4eUVzbHkvx5DLwFVImsbXHvRG29B4PcU5+G0s06gwlGtaCdpgdk3"
+    "KHQYAbhF1Uz5soZrLgGWQMgwQUqmwd8dibdqbUPMFzXsocmrhnFefotnUQiUdA6a+oJFMnY0i2kGh2"
+    "naXg+Z723NLDxc7WeDpFuT1oizIpXihC9pzmd61jRtfVmjpHBTF9FtxW48BQbWb6680ETPYfRbVkbq"
+    "hbg1PBwQ2jiCl2H9r7PSAFR1BcPpscupob4wfIAMMJCFMwJ/u3+5XNAD+5M/ThHLaDAXQCowM+wF+"
+    "Ee6sCTjEmHY4ukYqGE/e4qvOsPWCPqdJl1wIwc3VAl4pQxZ7w7y1FdNs5XzEd8+lQDKoYtPG+13sK"
+    "aiaUc9GvLBzPfVrUlFbHtQH/4+1TR0UadFhiteDKlS7hnjWphfOrTCET8AFYTKrrY9R8nZEyzFy5+s"
+    "FtZyhW0EqAOV08ptBtg5svHu/S8oBWeJwwOFX+P31+enePP4zgzUF/44rJHViB2ffJvKFtik5O1HQ1"
+    "2f6O21oMygsAGObkaKII03WFWfQ68GqDXQaj1cbqt+l2OAyiTrlWtom4Xw2Q8Ad1kvtAfgzJB8tY3j"
+    "Qw1L/RBbkJQgeKA7dxi4NxuEtx7xCkznsSslShk5wpViZHW8HmBrntpswnDHkSXZRA2RqyTRB1DfKO"
+    "vbGqAV1ePfLb3ZBDCoQ0Koe8/sUfIHFaflAadB+gPn/BX+ALGQ="
+)
+
+def _decode_humanizer() -> str:
+    import zlib, base64
+    return zlib.decompress(base64.b64decode(_HZR)).decode()
+
+
 def _default_system_prompt(max_words: int, language: str) -> str:
     return textwrap.dedent(f"""\
         You are an expert cover letter writer. Your task is to produce a
@@ -1509,7 +1548,11 @@ def _build_system_prompt() -> str:
     custom    = CFG["cover_letter"].get("system_instructions", "").strip()
     if custom:
         return custom
-    return _default_system_prompt(max_words, language)
+    base = _default_system_prompt(max_words, language)
+    # Humanizer: append anti-detection writing rules (local LLM only)
+    if CFG["cover_letter"].get("humanize") and AI.provider in ("ollama", "llamacpp"):
+        base += "\n\n" + _decode_humanizer()
+    return base
 
 
 def _build_user_prompt(req: GenerateRequest) -> str:

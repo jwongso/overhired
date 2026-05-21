@@ -20,7 +20,7 @@
 - **Pinned strategies** — SEEK, Indeed and LinkedIn always use their native structured data (inline JSON / JSON-LD / title tag), not fragile CSS selectors
 - **Self-healing** — stale or broken parsers are auto-detected and regenerated
 - **AI cover letter** — personalized to your resume and the specific role
-- **Humanizer** — optional anti-AI-detection writing rules that dramatically reduce ZeroGPT/GPTZero scores (100% → 12–36%); local LLM only, toggle in settings
+- **Writing style tuner** — optional rules that adjust tone, sentence variety, and vocabulary to match your natural voice; local LLM only, toggle in settings
 - **Post-save analysis** — `insight.md` (jargon decoder), `score.md` (fit score), `summary.md` (company profile)
 - **ATS form filler** — detects application forms, generates field-mapping ops once per site, then fills instantly
 - **Local-first AI** — defaults to [Ollama](https://ollama.com); OpenAI and Claude supported
@@ -28,7 +28,7 @@
 - **Settings page** — web UI at `http://localhost:7878/settings` for provider, model, prompts, and toggles
 - **Auth token** — optional `X-Grapply-Token` header protects all endpoints
 - **MCP server** — exposes parser tools and application tracker to Claude Desktop, Cursor, or any MCP client
-- **Feng shui panel** — daily lucky day + best interview dates 🈴
+- **Feng shui panel** — fun optional feature: daily lucky day and best interview dates 🈴
 - **Usage stats dashboard** — live cost and token tracking per provider/model/endpoint, accessible at `http://localhost:7878/stats`
 
 ---
@@ -55,7 +55,7 @@ path = "~/Documents/my-resume.pdf"   # PDF, MD or TXT
 [cover_letter]
 max_words  = 450
 language   = "English"
-humanize   = false    # anti-AI-detection rules (local LLM only)
+humanize   = false    # writing style tuner (local LLM only)
 ```
 
 ### 2 — Start companion
@@ -361,25 +361,24 @@ Navigate to `http://localhost:7878/settings` for a web UI that configures:
 - **Endpoint and API key**
 - **Resume path**
 - **Cover letter settings** — max words, language, system/user instructions
-- **Humanizer toggle** — enables anti-AI-detection writing rules (local LLM only)
-- **Easter egg toggle** — appends a hidden AI prompt injection comment to HTML output
+- **Writing style tuner toggle** — adjusts tone and vocabulary to match your natural voice (local LLM only)
+- **Easter egg toggle** — fun optional feature for HTML output
 
 All changes are saved to `~/.grapply/config.toml` and take effect immediately.
 
 ---
 
-## Humanizer (Anti-AI Detection)
+## Writing Style Tuner
 
-When `humanize = true` in config (or toggled via the settings checkbox), the companion appends structural and vocabulary rules to the cover letter system prompt that reduce AI detection scores from ~100% to 12-36% on ZeroGPT/GPTZero.
+When `humanize = true` in config (or toggled via the settings checkbox), the companion appends structural and vocabulary rules to the cover letter system prompt to better match your natural writing voice.
 
 **How it works:**
-- Dramatic sentence length variation (mix <7 word with >25 word sentences)
-- Discourse markers that break token prediction ("honestly", "pretty much", "I'd say")
-- Structural disruption (start sentences with And/But/So, parenthetical asides)
-- Casual connectors and contractions throughout
-- Banned word list (robust, scalable, seamless, leverage, etc.)
+- Sentence length variation for a more natural reading rhythm
+- Discourse markers that reflect conversational tone
+- Casual connectors and contractions where appropriate
+- Banned word list (robust, scalable, seamless, leverage, etc.) to avoid generic AI phrasing
 
-**Safety:** Only activates when the AI provider is `ollama` or `llamacpp` (local). Cloud providers (OpenAI, Claude) never see the humanizer prompt.
+Only activates when the AI provider is `ollama` or `llamacpp` (local). Cloud providers (OpenAI, Claude) are not affected.
 
 ---
 
